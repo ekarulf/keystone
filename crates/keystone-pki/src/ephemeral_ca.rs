@@ -16,7 +16,6 @@ use keystone_core::identity::Sha256Fingerprint;
 use keystone_core::signer::DerEcdsaSignature;
 use rcgen::{Issuer, KeyPair, PublicKeyData, SignatureAlgorithm};
 use time::OffsetDateTime;
-use zeroize::Zeroizing;
 
 use crate::certificate::ParsedCertificate;
 use crate::params::{DeviceCertificateSpec, EphemeralCaSpec};
@@ -78,11 +77,23 @@ impl PublicKeyData for DevicePublicKey {
     }
 }
 
-/// A CA key that zeroizes its serialized form on drop.
+/// A CA key that exists only for the duration of one `issue` call.
 ///
-/// `rcgen::KeyPair` holds the key inside *ring*, which Keystone cannot reach to
-/// zeroize; what is wiped here is the PKCS#8 copy rcgen also keeps. That copy is
-/// the one that could otherwise be serialized to disk by mistake.
+/// What this guarantees, and what it does not, because the difference matters for
+/// the claim that an ephemeral CA "can never sign again":
+///
+/// * guaranteed — the key never reaches disk, a log, or the network, and it is
+///   unreachable through any API once [`issue`] returns. There is no accessor and
+///   no serialization path; `EphemeralCaOutput` carries only certificates.
+/// * not guaranteed — the private scalar is not scrubbed from process memory.
+///   `rcgen::KeyPair` holds it inside *ring*, which exposes no way to zeroize it,
+///   and rcgen's own PKCS#8 buffer is not writable from here either.
+///
+/// So the residual exposure is a core dump, an attached debugger, or swapped-out
+/// pages during the seconds a bootstrap runs. Closing it properly needs a
+/// zeroize-aware key type rather than a `Drop` impl that cannot reach the bytes;
+/// an earlier version of this `Drop` zeroed a `to_vec()` copy, which achieved
+/// nothing but looked like it had.
 struct EphemeralCaKey {
     key_pair: KeyPair,
 }
@@ -95,15 +106,10 @@ impl EphemeralCaKey {
     }
 }
 
-impl Drop for EphemeralCaKey {
-    fn drop(&mut self) {
-        // Overwrite the copy of the private key Keystone can address. The DER is
-        // owned by rcgen, so this wipes it in place through a local copy of the
-        // bytes rather than reallocating.
-        let mut serialized = Zeroizing::new(self.key_pair.serialized_der().to_vec());
-        serialized.iter_mut().for_each(|byte| *byte = 0);
-    }
-}
+// No `Drop` impl. There is nothing here it could usefully wipe: see the note on
+// `EphemeralCaKey`. A `Drop` that zeroed a copy of the serialized key would leave
+// the original untouched while reading as though the key had been erased, which is
+// worse than being explicit about the limitation.
 
 /// Generate a one-shot CA and issue one device certificate with it.
 ///

@@ -220,14 +220,42 @@ fn client_for<'a>(
 /// configuration believes, which would otherwise show up as puzzling
 /// authorization failures in whatever used the credentials.
 fn check_assumed_role(assumed: &str, requested_role_arn: &str) -> Result<()> {
-    let role_name = requested_role_arn.rsplit('/').next().unwrap_or_default();
-    if role_name.is_empty() || assumed.contains(role_name) {
+    // Compared as a whole path segment, not as a substring. `contains` accepts
+    // every role whose name merely embeds the requested one — `KeystonePersonal`
+    // matches `KeystonePersonalAdmin` — and also matches when the name appears in
+    // the session-name position, so a session named after the role would satisfy
+    // the check no matter which role was actually assumed.
+    let requested = requested_role_arn.rsplit('/').next().unwrap_or_default();
+    if requested.is_empty() {
         return Ok(());
     }
-    Err(KeystoneError::InvalidCredentialResponse(format!(
-        "IAM Roles Anywhere returned a session for {assumed}, which is not the requested role \
-         {requested_role_arn}. Check which role the Roles Anywhere profile maps to."
-    )))
+    match assumed_role_name(assumed) {
+        // The design asks for this check "when that metadata is available", and an
+        // ARN in a shape Keystone does not recognize is a case where it is not.
+        // Failing here would break credentials over an unrecognized ARN format
+        // rather than over a real mismatch.
+        None => Ok(()),
+        Some(actual) if actual == requested => Ok(()),
+        Some(_) => Err(KeystoneError::InvalidCredentialResponse(format!(
+            "IAM Roles Anywhere returned a session for {assumed}, which is not the requested role \
+             {requested_role_arn}. Check which role the Roles Anywhere profile maps to."
+        ))),
+    }
+}
+
+/// The role name from an STS assumed-role ARN.
+///
+/// `arn:aws:sts::123456789012:assumed-role/<role>/<session>` — the shape AWS
+/// returns in `assumedRoleUser.arn`. A role with an IAM path loses that path here,
+/// which is why this is compared against the requested ARN's last segment rather
+/// than against its full resource.
+fn assumed_role_name(assumed: &str) -> Option<&str> {
+    let resource = assumed.split(':').nth(5)?;
+    let rest = resource.strip_prefix("assumed-role/")?;
+    // A session name may itself contain no `/`, so the role is everything up to
+    // the first separator.
+    let name = rest.split('/').next()?;
+    (!name.is_empty()).then_some(name)
 }
 
 /// Print the canonical request and string-to-sign to standard error.
@@ -423,5 +451,54 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{error}").contains("SomethingElse"), "{error}");
+    }
+
+    #[test]
+    fn a_role_whose_name_merely_contains_the_requested_one_is_rejected() {
+        // The case a `contains` check accepts. `KeystonePersonalAdmin` is a
+        // different role with different permissions, and the name of the requested
+        // role is a prefix of it — so this is the mismatch most likely to be a real
+        // misconfiguration rather than a typo.
+        let requested = "arn:aws:iam::123456789012:role/KeystonePersonal";
+        for actual in [
+            "arn:aws:sts::123456789012:assumed-role/KeystonePersonalAdmin/erik-macbook",
+            "arn:aws:sts::123456789012:assumed-role/NotKeystonePersonal/erik-macbook",
+            // The role name in the session-name position: the assumed role is
+            // something else entirely, and only segment-wise parsing notices.
+            "arn:aws:sts::123456789012:assumed-role/SomethingElse/KeystonePersonal",
+        ] {
+            assert!(
+                check_assumed_role(actual, requested).is_err(),
+                "should be rejected: {actual}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unrecognized_assumed_role_arn_does_not_fail_the_exchange() {
+        // "when that metadata is available" — credentials that work must not be
+        // discarded because the ARN was not in the shape this parser expects.
+        let requested = "arn:aws:iam::123456789012:role/KeystonePersonal";
+        for actual in [
+            "",
+            "not-an-arn",
+            "arn:aws:sts::123456789012:federated-user/x",
+        ] {
+            assert!(
+                check_assumed_role(actual, requested).is_ok(),
+                "should be tolerated: {actual:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_role_with_an_iam_path_still_matches() {
+        // IAM paths do not appear in the STS assumed-role ARN, so comparing the
+        // full resource would reject a correct session.
+        check_assumed_role(
+            "arn:aws:sts::123456789012:assumed-role/KeystonePersonal/erik-macbook",
+            "arn:aws:iam::123456789012:role/keystone/devices/KeystonePersonal",
+        )
+        .unwrap();
     }
 }

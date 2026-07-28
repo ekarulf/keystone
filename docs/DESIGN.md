@@ -4,7 +4,12 @@ Secure Enclave-backed temporary AWS credentials for macOS.
 
 ## Status
 
-Proposed design.
+Implemented. This document remains the specification: where the code and this
+document disagree, that is a defect in one of them, not a licence to diverge.
+
+Sections written as future work are marked where they are still future work. The
+Implementation Plan at the end describes phases that have all shipped and is kept
+as a record of the intended order.
 
 ## Summary
 
@@ -250,45 +255,32 @@ Command-line interface and AWS `credential_process` integration.
 
 ---
 
-# Suggested Dependencies
+# Dependencies
 
-Exact versions should be pinned after the first successful prototype.
+The workspace `Cargo.toml` is authoritative. This was written as a guess before
+implementation; it is kept for the reasoning, with the outcome recorded.
 
-```toml
-[dependencies]
-anyhow = "1"
-base64 = "0.22"
-clap = { version = "4", features = ["derive"] }
-fs2 = "0.4"
-hex = "0.4"
-http = "1"
-rand_core = "0.6"
-reqwest = { version = "0.12", default-features = false, features = [
-    "json",
-    "rustls-tls",
-] }
-rustls = "0.23"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
-thiserror = "2"
-time = { version = "0.3", features = [
-    "formatting",
-    "parsing",
-    "serde",
-] }
-toml = "0.8"
-url = "2"
-x509-cert = "0.2"
-zeroize = "1"
+Dropped as unnecessary: `anyhow` (the library defines its own error enum, and a
+CLI that must not leak secrets into messages wants the enum), `http` and `url`
+(the one endpoint is built by `format!`), `rustls` (reached only through
+`reqwest`'s `rustls-tls` feature), `rand_core` (`rand` suffices).
 
-[target.'cfg(target_os = "macos")'.dependencies]
-cryptokit-rs = "0.2"
-security-framework = "3"
-core-foundation = "0.10"
-```
+Replaced: `x509-cert` by **`x509-parser`** with its `verify` feature, because
+signature verification had to be real — comparing issuer and subject names would
+accept a forged chain.
 
-Prefer `cryptokit-rs` for Secure Enclave key operations and a narrow use of `security-framework` for Keychain integration.
+Never needed: **`security-framework`** and **`core-foundation`**. The original plan
+assumed Keychain integration, but `SecureEnclave.P256.Signing.PrivateKey` is not a
+Keychain API — it returns a wrapped-key blob that Keystone stores itself, so no
+Keychain access is involved. See "Secure Enclave Identity".
+
+Added: `p256` (verification and test signing), `rcgen` (certificate and CSR
+generation), `tera` (CDK templates), `rustix` (a safe `geteuid` for the
+file-ownership check, since the workspace forbids `unsafe_code`).
+
+Kept as planned: `base64`, `clap`, `fs2`, `hex`, `reqwest` with `rustls-tls`,
+`serde`, `serde_json`, `sha2`, `thiserror`, `time`, `toml`, `zeroize`, and
+`cryptokit-rs` for Secure Enclave key operations.
 
 ---
 
@@ -526,18 +518,19 @@ pub trait KeystoneSigningIdentity {
 }
 ```
 
-The implementation must establish whether the selected CryptoKit API accepts:
-
-* the original message and hashes internally; or
-* a precomputed SHA-256 digest.
+Resolved during implementation: CryptoKit's `signature(for:)` takes the **original
+message and hashes it internally**. The string-to-sign is therefore passed
+unhashed, which also matches what the official AWS helper does.
 
 Do not accidentally hash the Roles Anywhere string-to-sign twice.
 
-If both modes are exposed, use distinct methods:
+Both modes exist as distinct methods so the distinction cannot be made by
+accident — `sign_prehashed_sha256` lives on a separate `PrehashedSigner` trait, so
+reaching for it is deliberate:
 
 ```rust
-fn sign_message_ecdsa_sha256(...)
-fn sign_prehashed_sha256(...)
+fn sign_message_ecdsa_sha256(...)  // Signer
+fn sign_prehashed_sha256(...)      // PrehashedSigner
 ```
 
 ---
@@ -547,7 +540,7 @@ fn sign_prehashed_sha256(...)
 Create a local Secure Enclave identity without issuing a certificate.
 
 ```bash
-keystone init --profile personal
+keystone init --profile personal --region us-east-1
 ```
 
 Steps:
@@ -1261,7 +1254,9 @@ The AWS SDK caches returned credentials in the calling process until refresh is 
 
 ## V1
 
-Add a Keychain-backed credential cache.
+As implemented: a JSON cache under the cache directory, written mode 0600, one
+file per profile. Keychain backing is **still future work** — the note below about
+avoiding plaintext JSON describes the intended end state, not what ships.
 
 Avoid storing session credentials in plaintext JSON unless explicitly configured.
 
@@ -1501,20 +1496,26 @@ No CA ARN is required.
 
 ## Generated project
 
+For `--stack-name KeystonePersonal`. The `bin/`, `lib/`, and `test/` filenames are
+derived from the stack name, so they change with it.
+
 ```text
 keystone-infra/
 ├── bin/
-│   └── keystone-infra.ts
+│   └── keystone-personal.ts
 ├── lib/
 │   └── keystone-personal-stack.ts
 ├── test/
 │   └── keystone-personal-stack.test.ts
 ├── certificates/
 │   └── keystone-ca.pem
+├── policy/
+│   └── inline-policy.json        (only with --policy)
 ├── cdk.json
 ├── package.json
 ├── tsconfig.json
 ├── README.md
+├── .gitignore
 └── keystone.profile.toml
 ```
 
@@ -1653,12 +1654,11 @@ The generated code should contain a warning that the exact condition key must ma
 
 ## Empty role
 
-Default:
+The default, when neither `--policy` nor `--managed-policy-arn` is given:
 
 ```bash
 keystone infra cdk init \
-    --profile personal \
-    --permissions none
+    --profile personal
 ```
 
 The generated role contains no workload permissions.
@@ -1793,7 +1793,11 @@ The command reads:
 * `TrustAnchorArn`;
 * `RolesAnywhereProfileArn`;
 * `RoleArn`;
-* `Region`.
+* `Region`;
+* `KeystoneKeyId`, which is what lets sync refuse an outputs file produced for
+  another device.
+
+Pass `--stack-name` when the outputs file holds more than one stack.
 
 It updates the local profile:
 
@@ -1893,6 +1897,13 @@ template.hasResourceProperties(
 ---
 
 # CLI Types
+
+Illustrative, not authoritative: `crates/keystone-cli/src/cli.rs` is the shipped
+definition, and `keystone <command> --help` is the reliable reference for flags.
+Known differences from the sketch below: `Test` takes its own `TestArgs`, the CDK
+init arguments name a single profile rather than a list, `--duration-seconds` has
+no default at the CLI layer (the default is applied downstream), and
+`--trust-anchor-name` and `--roles-anywhere-profile-name` exist but are not shown.
 
 ```rust
 #[derive(clap::Subcommand)]
@@ -1997,15 +2008,23 @@ Debug signing output should require:
 ```bash
 keystone credential-process \
     --profile personal \
-    --debug-signing \
-    --redact
+    --debug-signing
 ```
 
-Even then, authorization signatures and credentials should remain redacted by default.
+Redaction is on by default; `--redact false` widens the output to the full
+certificate headers, which are public. Authorization signatures and credentials
+stay redacted either way.
 
 ---
 
 # Error Model
+
+Illustrative, not authoritative: `crates/keystone-core/src/error.rs` is the actual
+enum. It is `#[non_exhaustive]`, several of these variants carry a `String` of
+context that is elided here, and it has grown variants this sketch does not list
+(`SecureEnclave`, `InvalidCertificate`, `UnknownProfile`, `ProfileIncomplete`,
+`Io`, `Other`). What matters below is the *shape* — one variant per failure a user
+can act on, each with a message that names the next step.
 
 ```rust
 #[derive(Debug, thiserror::Error)]
@@ -2173,6 +2192,10 @@ Against a dedicated account:
 
 # Implementation Plan
 
+All phases below have shipped. Kept as a record of the intended order, which the
+code comments still cross-reference; the phase numbering is this document's own,
+not an external tracker's.
+
 ## Phase 0: AWS protocol spike
 
 Implement Roles Anywhere using:
@@ -2290,9 +2313,11 @@ The MVP may:
 * support Apple Silicon only;
 * support the standard AWS partition only;
 * use one identity per profile;
-* omit persistent credential caching;
+* omit persistent credential caching — in the event this was implemented, as a
+  mode-0600 JSON cache;
 * create one ephemeral CA per identity;
-* create a new IAM role rather than modifying an existing role.
+* create a new IAM role rather than modifying an existing role — `--existing-role-arn`
+  references one without modifying it.
 
 The MVP must not:
 
@@ -2372,7 +2397,7 @@ AWS_PROFILE=keystone-personal \
 
 ## Keystone is standalone
 
-Keystone is unrelated to Scranton and can be used by any macOS application or developer workflow.
+Keystone is not tied to any particular system and can be used by any macOS application or developer workflow.
 
 ## Secure Enclave identity
 

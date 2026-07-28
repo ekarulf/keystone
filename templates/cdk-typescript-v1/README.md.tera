@@ -106,7 +106,8 @@ aws sts get-caller-identity
 and check the `TagSession` / `AssumeRole` entries in CloudTrail for the
 `x509SAN/URI` principal tag. Until you have confirmed it, do not grant this role
 permissions you would not grant an unauthenticated caller.
-{% if existing_role_arn %}
+{%- if existing_role_arn %}
+
 ## Trust policy for the existing role
 
 This project does not modify `{{ existing_role_arn }}`. Add the following

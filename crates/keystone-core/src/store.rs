@@ -41,21 +41,19 @@ impl Store {
     /// both have to work on a machine that has never run Keystone.
     pub fn load_config(&self) -> Result<Config> {
         let path = self.paths.config_file();
+        // Checked before the read, not after: the point of the check is to refuse
+        // to act on content another user could have written, and parsing it first
+        // means the untrusted bytes have already been interpreted.
+        if !self.allow_unsafe_permissions && path.exists() {
+            check_not_group_or_world_writable(&path)?;
+        }
         match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                if !self.allow_unsafe_permissions {
-                    check_not_group_or_world_writable(&path)?;
+            Ok(text) => Config::parse(&text).map_err(|e| match e {
+                KeystoneError::InvalidConfiguration(message) => {
+                    KeystoneError::InvalidConfiguration(format!("{}: {message}", path.display()))
                 }
-                Config::parse(&text).map_err(|e| match e {
-                    KeystoneError::InvalidConfiguration(message) => {
-                        KeystoneError::InvalidConfiguration(format!(
-                            "{}: {message}",
-                            path.display()
-                        ))
-                    }
-                    other => other,
-                })
-            }
+                other => other,
+            }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
             Err(e) => Err(KeystoneError::io(
                 format!("cannot read {}", path.display()),
@@ -85,6 +83,13 @@ impl Store {
 
     pub fn load_identity(&self, key_id: &KeyId) -> Result<IdentityMetadata> {
         let path = self.paths.identity_file(key_id);
+        // This file names the Secure Enclave key to sign with and the public key
+        // Keystone checks the certificate against, so a writable one is as
+        // dangerous as a writable config: see `enclave.rs`, where the fingerprint
+        // comparison is what makes owning the key storage safe.
+        if !self.allow_unsafe_permissions && path.exists() {
+            check_not_group_or_world_writable(&path)?;
+        }
         let text = std::fs::read_to_string(&path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 KeystoneError::KeyUnavailable
@@ -165,8 +170,14 @@ impl Store {
     /// I/O error, because the actionable cause is an unfinished enrollment.
     pub fn load_certificates(&self, fingerprint: &Sha256Fingerprint) -> Result<(Vec<u8>, Vec<u8>)> {
         let dir = self.paths.certificate_dir(fingerprint);
+        let allow_unsafe = self.allow_unsafe_permissions;
         let read = |name: &str| -> Result<Vec<u8>> {
             let path = dir.join(name);
+            // The certificates are public, but swapping one would change which
+            // identity Keystone presents, so the write permission still matters.
+            if !allow_unsafe && path.exists() {
+                check_not_group_or_world_writable(&path)?;
+            }
             std::fs::read(&path).map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
                     KeystoneError::InvalidConfiguration(format!(
@@ -266,15 +277,42 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
     }
 }
 
+/// The temporary path [`write_atomic`] writes before renaming into place.
+///
+/// The random suffix is the point: a name derived only from the process ID is
+/// predictable to anyone who can list the directory, who could then pre-plant a
+/// symlink or a wide-open file at that path. Together with `create_new` in
+/// [`write_private`], guessing the name is the only way to interfere, and it is no
+/// longer guessable.
 fn temp_path_for(path: &Path) -> PathBuf {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "keystone".to_string());
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    parent.join(format!(".{name}.{}.tmp", std::process::id()))
+    let mut nonce = [0u8; 8];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
+    parent.join(format!(
+        ".{name}.{}.{}.tmp",
+        std::process::id(),
+        hex::encode(nonce)
+    ))
 }
 
+/// Write a fresh file that only the owner can read.
+///
+/// `create_new` rather than `create`, which matters for two reasons. `.mode()`
+/// applies only when the file is created, so opening a file that already exists
+/// would write private contents into whatever mode — and whatever owner — that
+/// file already had. And `create` follows a symlink, so a pre-planted link would
+/// redirect the write outside Keystone's directory. The temporary path is derived
+/// from the process ID, which is predictable to anyone who can list the
+/// directory, so neither is hypothetical.
+///
+/// Failing on a pre-existing file is safe here because this only ever writes the
+/// temporary file in [`write_atomic`], which a completed run always renames away.
+/// A leftover is debris from a crash, and `O_EXCL` reporting it is better than
+/// silently adopting it.
 fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
     #[cfg(unix)]
     {
@@ -283,13 +321,22 @@ fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
 
         let mut file = std::fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             // Set the mode at creation so the contents are never briefly
             // readable by another user.
             .mode(FILE_MODE)
             .open(path)
-            .map_err(|e| KeystoneError::io(format!("cannot create {}", path.display()), e))?;
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    KeystoneError::Other(format!(
+                        "{} already exists. Another Keystone process may be running, or a \
+                         previous run was interrupted; remove it and retry.",
+                        path.display()
+                    ))
+                } else {
+                    KeystoneError::io(format!("cannot create {}", path.display()), e)
+                }
+            })?;
         file.write_all(contents)
             .map_err(|e| KeystoneError::io(format!("cannot write {}", path.display()), e))?;
         file.sync_all()

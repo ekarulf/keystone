@@ -73,7 +73,7 @@ cargo build --release   # target/release/keystone
 ```bash
 # --device-name also becomes the role session name, so CloudTrail and
 # `aws sts get-caller-identity` name this Mac rather than a hash of its key.
-keystone bootstrap --profile personal --ca-mode ephemeral \
+keystone bootstrap --profile personal --region us-east-1 --ca-mode ephemeral \
     --device-name my-macbook --generate-cdk ./keystone-infra
 
 cd keystone-infra && npm install && npx cdk deploy --outputs-file cdk-outputs.json

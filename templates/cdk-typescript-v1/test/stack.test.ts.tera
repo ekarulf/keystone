@@ -209,8 +209,11 @@ test("no administrator policy is attached", () => {
 {%- endif %}
 
 test("the outputs Keystone needs are present", () => {
-  // `keystone infra cdk sync-profile` reads these four by name from
+  // `keystone infra cdk sync-profile` reads these by name from
   // `cdk-outputs.json`; renaming one breaks the sync with a confusing error.
+  // TrustAnchorArn, RolesAnywhereProfileArn and RoleArn are required; Region and
+  // KeystoneKeyId are read when present (the key ID is what lets sync refuse
+  // another device's outputs). DeviceSanUri is for the operator, not for sync.
   const outputs = synthesize().findOutputs("*");
   for (const name of [
     "TrustAnchorArn",

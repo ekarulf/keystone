@@ -31,6 +31,58 @@ const FORBIDDEN_MANAGED_POLICIES: &[&str] = &[
     "AWSOrganizationsFullAccess",
 ];
 
+/// Find an `Allow` statement granting every action on every resource.
+///
+/// Returns a 1-based index for the message, so the operator can find the statement
+/// in their own file. Handles both shapes IAM accepts for `Statement` (one object
+/// or an array) and both for `Action`/`Resource` (a string or an array).
+///
+/// Deliberately narrow: it looks for the unqualified `*` on both axes at once, not
+/// for wildcards in general. `s3:*` on one bucket is a normal policy, and a
+/// generator that rejected it would just get bypassed. This catches only the case
+/// that is indistinguishable from `AdministratorAccess`.
+///
+/// A statement carrying a `Condition` is still refused. A condition can narrow the
+/// grant to something reasonable, but it can also be trivially satisfiable, and
+/// deciding which would mean evaluating IAM condition semantics here.
+fn find_administrator_statement(statement: &serde_json::Value) -> Option<String> {
+    let statements = match statement {
+        serde_json::Value::Array(items) => items.clone(),
+        other => vec![other.clone()],
+    };
+
+    for (index, statement) in statements.iter().enumerate() {
+        // A missing `Effect` defaults to nothing in IAM — the document is invalid
+        // — so only an explicit Allow is treated as one.
+        let allows = statement
+            .get("Effect")
+            .and_then(|effect| effect.as_str())
+            .is_some_and(|effect| effect.eq_ignore_ascii_case("Allow"));
+        if !allows {
+            continue;
+        }
+        // `NotAction`/`NotResource` are a different construct and are not folded
+        // in here; an `Allow` with `NotAction` is unusual enough that guessing at
+        // its intent would produce false rejections.
+        if is_unrestricted(statement.get("Action")) && is_unrestricted(statement.get("Resource")) {
+            return Some(format!("#{}", index + 1));
+        }
+    }
+    None
+}
+
+/// Whether an `Action` or `Resource` field is the unqualified wildcard.
+fn is_unrestricted(field: Option<&serde_json::Value>) -> bool {
+    match field {
+        Some(serde_json::Value::String(value)) => value == "*",
+        // Any `*` in the list is enough: the other entries only add to the grant.
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .any(|item| item.as_str().is_some_and(|value| value == "*")),
+        _ => false,
+    }
+}
+
 /// Where the trust anchor comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrustAnchorTarget {
@@ -83,11 +135,23 @@ impl PermissionMode {
                 "policy file must contain a JSON object, an IAM policy document".to_string(),
             ));
         }
-        if document.get("Statement").is_none() {
-            return Err(KeystoneError::InvalidConfiguration(
+        let statement = document.get("Statement").ok_or_else(|| {
+            KeystoneError::InvalidConfiguration(
                 "policy document has no \"Statement\"; it is probably not an IAM policy"
                     .to_string(),
-            ));
+            )
+        })?;
+        // The same prohibition `managed` enforces, by the easier path. Refusing
+        // `AdministratorAccess` by name while accepting a hand-written
+        // `{"Action":"*","Resource":"*"}` would leave the rule cosmetic.
+        if let Some(offending) = find_administrator_statement(statement) {
+            return Err(KeystoneError::InvalidConfiguration(format!(
+                "policy statement {offending} allows every action on every resource, which is \
+                 AdministratorAccess written out. Keystone will not attach it to a device role: a \
+                 Secure Enclave identity refreshes credentials without user interaction, so this \
+                 would be a standing grant. Narrow the policy, or attach it yourself after \
+                 deployment."
+            )));
         }
         Ok(Self::Inline { document })
     }
@@ -592,6 +656,52 @@ mod tests {
         assert!(PermissionMode::inline("not json").is_err());
         assert!(PermissionMode::inline("[]").is_err());
         assert!(PermissionMode::inline(r#"{"Version":"2012-10-17"}"#).is_err());
+    }
+
+    #[test]
+    fn an_inline_policy_cannot_smuggle_in_administrator_access() {
+        // The prohibition `managed` enforces by name, defeated by writing it out.
+        // Every shape IAM accepts, because catching only the first would leave the
+        // check trivially avoidable.
+        for document in [
+            r#"{"Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}"#,
+            r#"{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}"#,
+            r#"{"Statement":[{"Effect":"Allow","Action":["*"],"Resource":["*"]}]}"#,
+            r#"{"Statement":[{"Effect":"Allow","Action":["s3:Get*","*"],"Resource":"*"}]}"#,
+            r#"{"Statement":[{"Effect":"allow","Action":"*","Resource":"*"}]}"#,
+            // Not the first statement, so the scan cannot stop at the head.
+            r#"{"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"},
+                             {"Effect":"Allow","Action":"*","Resource":"*"}]}"#,
+            // A condition can be trivially satisfiable, so it does not rescue it.
+            r#"{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*",
+                              "Condition":{"Bool":{"aws:SecureTransport":"true"}}}]}"#,
+        ] {
+            let error = PermissionMode::inline(document)
+                .expect_err(&format!("should be refused: {document}"))
+                .to_string();
+            assert!(error.contains("every action on every resource"), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_policy_that_is_merely_broad_is_still_allowed() {
+        // The guard has to stay narrow. A generator that refused ordinary policies
+        // would be worked around rather than obeyed.
+        for document in [
+            // A service wildcard scoped to a resource, the common shape.
+            r#"{"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"arn:aws:s3:::bucket/*"}]}"#,
+            // Every action, but only on one resource.
+            r#"{"Statement":[{"Effect":"Allow","Action":"*","Resource":"arn:aws:s3:::bucket"}]}"#,
+            // Every resource, but only one action — how most read-only policies look.
+            r#"{"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]}"#,
+            // A Deny on everything is a restriction, not a grant.
+            r#"{"Statement":[{"Effect":"Deny","Action":"*","Resource":"*"}]}"#,
+        ] {
+            assert!(
+                PermissionMode::inline(document).is_ok(),
+                "should be allowed: {document}"
+            );
+        }
     }
 
     #[test]

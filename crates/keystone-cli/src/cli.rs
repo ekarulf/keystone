@@ -190,7 +190,7 @@ pub struct CredentialProcessArgs {
 
     /// Print the canonical request and string-to-sign to standard error.
     ///
-    /// Signatures and credentials stay redacted; `--no-redact` is a separate,
+    /// Signatures and credentials stay redacted; `--redact false` is a separate,
     /// deliberate step.
     #[arg(long)]
     pub debug_signing: bool,

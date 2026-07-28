@@ -82,7 +82,17 @@ impl AwsSessionCredentials {
 pub const CREDENTIAL_PROCESS_VERSION: u8 = 1;
 
 /// The JSON document written to standard output by `keystone credential-process`.
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// Holds the same secrets as [`AwsSessionCredentials`], and protects them the same
+/// way: a hand-written `Debug` and a `Drop` that zeroizes, matching
+/// [`CachedCredentials`] below. The fields stay plain `String`s because `serde`
+/// must see the types it can serialize — `Zeroizing` implements neither
+/// `Serialize` nor `Deserialize` — so the wiping happens on drop instead.
+///
+/// Worth the trouble even though this type is short-lived: it is the one place a
+/// secret exists as a plain `String` on its way to standard output, so a future
+/// `{:?}` here would print credentials into a diagnostic.
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CredentialProcessOutput {
     pub version: u8,
@@ -90,6 +100,26 @@ pub struct CredentialProcessOutput {
     pub secret_access_key: String,
     pub session_token: String,
     pub expiration: String,
+}
+
+impl Drop for CredentialProcessOutput {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.secret_access_key.zeroize();
+        self.session_token.zeroize();
+    }
+}
+
+impl std::fmt::Debug for CredentialProcessOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialProcessOutput")
+            .field("version", &self.version)
+            .field("access_key_id", &self.access_key_id)
+            .field("secret_access_key", &"<redacted>")
+            .field("session_token", &"<redacted>")
+            .field("expiration", &self.expiration)
+            .finish()
+    }
 }
 
 /// A cached credential set, as stored under the cache directory.

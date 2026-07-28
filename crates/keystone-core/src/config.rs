@@ -470,12 +470,36 @@ pub const FILE_MODE: u32 = 0o600;
 /// A writable config file lets another local user redirect Keystone at a role
 /// or trust anchor of their choosing, so this is refused unless the caller
 /// explicitly overrides it.
+///
+/// Three distinct ways another user can control the content, all checked:
+///
+/// * the file is group- or world-writable;
+/// * the file belongs to someone else, who can change its mode back whenever they
+///   like — a mode check alone reads their file as safe;
+/// * the path is a symlink, since `std::fs::metadata` follows links and would
+///   report the mode of a safe target rather than of the link, which its owner can
+///   repoint at any moment.
+///
+/// The containing directory is deliberately *not* checked here. Keystone creates
+/// its own directories 0700, and the caller-chosen output directories that
+/// `write_atomic` also serves are the user's to share.
 #[cfg(unix)]
 pub fn check_not_group_or_world_writable(path: &Path) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
-    let metadata = std::fs::metadata(path)
+    // `symlink_metadata` does not follow links, so a link is visible as a link.
+    let metadata = std::fs::symlink_metadata(path)
         .map_err(|e| KeystoneError::io(format!("cannot inspect {}", path.display()), e))?;
+
+    if metadata.file_type().is_symlink() {
+        return Err(KeystoneError::InvalidConfiguration(format!(
+            "{} is a symbolic link. Keystone reads it only if it is a regular file, because \
+             whoever owns the link can repoint it after this check; replace it with the file \
+             itself or pass --allow-unsafe-permissions",
+            path.display()
+        )));
+    }
+
     let mode = metadata.mode() & 0o777;
     if mode & 0o022 != 0 {
         return Err(KeystoneError::InvalidConfiguration(format!(
@@ -485,6 +509,22 @@ pub fn check_not_group_or_world_writable(path: &Path) -> Result<()> {
             path.display()
         )));
     }
+
+    // Root is accepted as an owner: it can read and rewrite anything regardless,
+    // so refusing a root-owned file would buy nothing and would break a Keystone
+    // installed by an administrator.
+    let owner = metadata.uid();
+    let caller = rustix::process::geteuid().as_raw();
+    if owner != caller && owner != 0 {
+        return Err(KeystoneError::InvalidConfiguration(format!(
+            "{} is owned by uid {owner}, not by you (uid {caller}); its owner can change its \
+             permissions at any time, so run `chown {caller} {}` or pass \
+             --allow-unsafe-permissions",
+            path.display(),
+            path.display()
+        )));
+    }
+
     Ok(())
 }
 

@@ -107,13 +107,18 @@ pub fn parse_rfc3339(value: &str) -> Result<OffsetDateTime> {
 }
 
 /// Render a duration the way Keystone reports certificate lifetimes.
+///
+/// Every caller embeds this in a sentence — "certificate expires in {}",
+/// "{} remaining" — so the under-a-day case reads as a duration ("less than a
+/// day"), not as a date. "today" is correct English on its own and wrong in all
+/// three of those sentences.
 pub fn describe_duration_days(duration: time::Duration) -> String {
-    let days = duration.whole_days();
-    match days {
-        d if d < 0 => "in the past".to_string(),
-        0 => "today".to_string(),
+    // Negative durations reach here only defensively: the expired-certificate
+    // caller negates before calling, so both directions round to the same phrase.
+    match duration.whole_days() {
+        0 | -1 => "less than a day".to_string(),
         1 => "1 day".to_string(),
-        d => format!("{d} days"),
+        d => format!("{} days", d.abs()),
     }
 }
 
@@ -166,10 +171,28 @@ mod tests {
     fn durations_are_described_in_whole_days() {
         assert_eq!(describe_duration_days(time::Duration::days(90)), "90 days");
         assert_eq!(describe_duration_days(time::Duration::days(1)), "1 day");
-        assert_eq!(describe_duration_days(time::Duration::hours(5)), "today");
+        assert_eq!(describe_duration_days(time::Duration::days(3)), "3 days");
+    }
+
+    #[test]
+    fn a_partial_day_reads_as_a_duration_rather_than_a_date() {
+        // Every caller embeds this in a sentence: "certificate expires in {}",
+        // "{} remaining". "today" made those read as "expires in today".
         assert_eq!(
-            describe_duration_days(time::Duration::days(-3)),
-            "in the past"
+            describe_duration_days(time::Duration::hours(5)),
+            "less than a day"
         );
+        assert_eq!(
+            describe_duration_days(time::Duration::hours(-5)),
+            "less than a day"
+        );
+    }
+
+    #[test]
+    fn an_elapsed_duration_is_described_by_its_magnitude() {
+        // `validate` negates before calling for the expired case, so a negative
+        // value here is defensive — but it must not print a minus sign into
+        // "certificate expired {}".
+        assert_eq!(describe_duration_days(time::Duration::days(-3)), "3 days");
     }
 }
