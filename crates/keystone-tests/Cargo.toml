@@ -1,0 +1,67 @@
+[package]
+name = "keystone-tests"
+description = "Golden, PKI, and integration test suites for Keystone"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Nothing depends on this crate and it ships no binary: it exists so the suites
+# in the repository's `tests/` directory can share one fixture loader.
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# Each suite lives under the repository's `tests/` directory rather than this
+# crate's, so the layout matches the design document's tree. Cargo accepts a
+# path outside the package directory; what it will not do is discover these
+# automatically, hence one entry per file.
+[[test]]
+name = "golden_create_session"
+path = "../../tests/golden/create_session.rs"
+
+[[test]]
+name = "golden_differential"
+path = "../../tests/golden/differential.rs"
+
+[[test]]
+name = "integration_pki"
+path = "../../tests/integration/pki.rs"
+
+[[test]]
+name = "integration_secure_enclave"
+path = "../../tests/integration/secure_enclave.rs"
+
+[[test]]
+name = "integration_cdk"
+path = "../../tests/integration/cdk.rs"
+
+[[test]]
+name = "integration_aws"
+path = "../../tests/integration/aws.rs"
+
+[dependencies]
+keystone-core.workspace = true
+
+[dev-dependencies]
+keystone-infra.workspace = true
+keystone-macos.workspace = true
+# `testing` gives the suites a software P-256 identity and a CA that can issue to
+# it. The CLI never enables either feature; see the note in each crate's manifest.
+keystone-pki = { workspace = true, features = ["testing"] }
+keystone-roles-anywhere = { workspace = true, features = ["testing"] }
+
+base64.workspace = true
+hex.workspace = true
+p256.workspace = true
+# The AWS suite posts one hand-tampered request, which by definition cannot go
+# through the client: the signature has to be applied before the mutation.
+reqwest.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+time.workspace = true
+toml.workspace = true
+
+[lints]
+workspace = true

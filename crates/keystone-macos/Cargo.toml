@@ -1,0 +1,31 @@
+[package]
+name = "keystone-macos"
+description = "Secure Enclave key generation, restoration, and signing for Keystone"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+keystone-core.workspace = true
+keystone-pki.workspace = true
+keystone-roles-anywhere.workspace = true
+
+base64.workspace = true
+time.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cryptokit-rs.workspace = true
+
+[dev-dependencies]
+keystone-pki = { workspace = true, features = ["testing"] }
+# The end-to-end test drives the same stub server as the Phase 0 tests, and the
+# endpoint override that points the client at it lives behind this feature.
+keystone-roles-anywhere = { workspace = true, features = ["testing"] }
+hex.workspace = true
+p256.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

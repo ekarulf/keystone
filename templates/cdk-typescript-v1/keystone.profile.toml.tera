@@ -1,0 +1,39 @@
+# The Keystone profile this project was generated from.
+#
+# A record of what was deployed, not a working configuration: the ARNs are
+# unknown until `cdk deploy` runs, and the local profile is updated by
+# `keystone infra cdk sync-profile --profile {{ profile_name }} --outputs ./cdk-outputs.json`.
+#
+# Contains only public data. The Secure Enclave key reference is not here.
+generated_by = "keystone"
+generator_version = "{{ generator_version }}"
+template_version = {{ template_version }}
+generated_at = "{{ generated_at }}"
+
+[profiles.{{ profile_name }}]
+region = "{{ region }}"
+duration_seconds = {{ duration_seconds }}
+key_id = "{{ key_id }}"
+{%- if role_session_name %}
+role_session_name = "{{ role_session_name }}"
+{%- endif %}
+{%- if certificate_fingerprint %}
+certificate_fingerprint_sha256 = "{{ certificate_fingerprint }}"
+{%- endif %}
+{%- if ca_fingerprint %}
+ca_fingerprint_sha256 = "{{ ca_fingerprint }}"
+{%- endif %}
+{%- if existing_trust_anchor_arn %}
+trust_anchor_arn = "{{ existing_trust_anchor_arn }}"
+{%- else %}
+# Filled in from the TrustAnchorArn output.
+trust_anchor_arn = "{{ placeholder }}"
+{%- endif %}
+# Filled in from the RolesAnywhereProfileArn output.
+roles_anywhere_profile_arn = "{{ placeholder }}"
+{%- if existing_role_arn %}
+role_arn = "{{ existing_role_arn }}"
+{%- else %}
+# Filled in from the RoleArn output.
+role_arn = "{{ placeholder }}"
+{%- endif %}

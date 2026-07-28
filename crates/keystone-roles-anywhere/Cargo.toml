@@ -1,0 +1,40 @@
+[package]
+name = "keystone-roles-anywhere"
+description = "IAM Roles Anywhere CreateSession client and AWS4-X509 signing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Exposes a software-key identity for golden and differential tests. Off by
+# default so a release build of the CLI cannot reach a non-hardware signer.
+testing = ["dep:p256", "dep:rand"]
+
+[dependencies]
+keystone-core.workspace = true
+
+base64.workspace = true
+hex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+time.workspace = true
+zeroize.workspace = true
+
+p256 = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Also listed above as optional: the crate's own unit tests use the software
+# identity, which `cfg(test)` enables without the feature flag. Integration
+# tests in `tests/` link the crate as an external dependency, so they need the
+# feature turned on explicitly.
+keystone-roles-anywhere = { path = ".", features = ["testing"] }
+p256.workspace = true
+rand.workspace = true
+
+[lints]
+workspace = true

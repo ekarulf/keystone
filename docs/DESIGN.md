@@ -1,0 +1,2415 @@
+# Keystone
+
+Secure Enclave-backed temporary AWS credentials for macOS.
+
+## Status
+
+Proposed design.
+
+## Summary
+
+Keystone is a standalone macOS credential helper that exchanges a hardware-backed device identity for temporary AWS credentials through AWS IAM Roles Anywhere.
+
+The long-lived private key is generated inside the Mac’s Secure Enclave and is never exported. Keystone uses that key to sign an IAM Roles Anywhere `CreateSession` request. IAM Roles Anywhere validates the signature and X.509 certificate, then returns ordinary temporary AWS credentials.
+
+```text
+macOS Secure Enclave
+P-256 signing key
+        │
+        ▼
+X.509 device certificate
+        │
+        ▼
+AWS4-X509-ECDSA-SHA256
+signed CreateSession request
+        │
+        ▼
+IAM Roles Anywhere
+        │
+        ▼
+Temporary AWS credentials
+        │
+        ▼
+AWS CLI and AWS SDKs
+```
+
+IAM Roles Anywhere is designed to exchange X.509-authenticated signatures for temporary SigV4-compatible credentials.
+
+Keystone avoids:
+
+* long-lived AWS access keys;
+* exportable private-key files;
+* a continuously running certificate authority;
+* the recurring cost of AWS Private CA;
+* biometric prompts for routine credential refresh.
+
+---
+
+# Goals
+
+Keystone should provide:
+
+* Secure Enclave-backed P-256 identity generation;
+* unattended P-256 signing after first device unlock;
+* X.509 certificate generation and installation;
+* an optional one-shot external CA;
+* IAM Roles Anywhere `CreateSession` authentication;
+* standard AWS `credential_process` output;
+* support for multiple named profiles;
+* credential caching and refresh;
+* infrastructure generation through AWS CDK;
+* key and trust-anchor rotation;
+* clear, redacted diagnostics;
+* a small and auditable private-key interface.
+
+---
+
+# Non-goals
+
+The initial version does not need to provide:
+
+* general-purpose certificate authority services;
+* AWS console login;
+* SSH authentication;
+* general human SSO;
+* Windows or Linux support;
+* RSA identities;
+* graphical configuration;
+* automatic CDK deployment;
+* automatic creation of an AWS Private CA;
+* fallback to a software private key;
+* broad administrative AWS permissions.
+
+---
+
+# Security Model
+
+Keystone has three durable identity components:
+
+```text
+Secure Enclave private key
+    Non-exportable P-256 signing key
+
+Device certificate
+    Public X.509 certificate for the Secure Enclave key
+
+Trust-anchor certificate
+    Public CA certificate registered with IAM Roles Anywhere
+```
+
+The durable private key exists only inside the Secure Enclave.
+
+The external CA private key may be:
+
+* retained offline for renewable certificates; or
+* generated temporarily and destroyed after issuing one device certificate.
+
+The default Keystone bootstrap model should use a temporary, one-device CA.
+
+## Threats Keystone addresses
+
+Keystone reduces the risk of:
+
+* long-lived AWS access keys being copied from disk;
+* a private key being copied from a PEM or PKCS#12 file;
+* accidental credential inclusion in backups;
+* credentials remaining valid indefinitely after device loss;
+* developers sharing static AWS credentials;
+* applications independently implementing credential storage.
+
+## Threats Keystone does not address
+
+Keystone does not prevent:
+
+* malware running as the same user from invoking Keystone;
+* malware from stealing temporary AWS session credentials;
+* malware from asking the Secure Enclave to sign requests;
+* misuse of an overly permissive IAM role;
+* compromise of the issuing CA before its key is destroyed;
+* compromise of the AWS account;
+* use of credentials that were already issued before revocation;
+* physical attacks against an unlocked, compromised Mac.
+
+The Secure Enclave prevents private-key export. It is not an application-level authorization boundary between processes running as the same user.
+
+---
+
+# Platform Support
+
+Version 0 supports:
+
+```text
+Operating system: macOS
+Primary architecture: Apple Silicon
+Private-key backend: Secure Enclave
+Public-key algorithm: P-256
+Signature algorithm: ECDSA with SHA-256
+AWS signing algorithm: AWS4-X509-ECDSA-SHA256
+```
+
+Intel Macs with a T2 chip may be supported later after integration testing.
+
+Keystone should fail clearly when:
+
+* no Secure Enclave is available;
+* an opaque key reference cannot be restored;
+* the key requires biometric interaction;
+* the certificate does not match the key;
+* the certificate is expired;
+* the certificate is not yet valid;
+* the certificate chain is malformed;
+* IAM Roles Anywhere rejects the identity.
+
+---
+
+# Repository Layout
+
+Recommended Rust workspace:
+
+```text
+keystone/
+├── Cargo.toml
+├── crates/
+│   ├── keystone-core/
+│   ├── keystone-macos/
+│   ├── keystone-pki/
+│   ├── keystone-roles-anywhere/
+│   ├── keystone-infra/
+│   └── keystone-cli/
+├── templates/
+│   └── cdk-typescript-v1/
+├── tests/
+│   ├── fixtures/
+│   ├── golden/
+│   └── integration/
+└── docs/
+```
+
+## `keystone-core`
+
+Portable application types:
+
+* configuration;
+* profile names;
+* identity metadata;
+* session credentials;
+* cache behavior;
+* time abstractions;
+* error types;
+* redaction.
+
+## `keystone-macos`
+
+macOS-specific behavior:
+
+* Secure Enclave availability;
+* P-256 key generation;
+* key restoration;
+* ECDSA signing;
+* Keychain interaction;
+* access-control configuration.
+
+## `keystone-pki`
+
+Certificate functionality:
+
+* X.509 certificate construction;
+* PKCS#10 CSR construction;
+* temporary CA generation;
+* certificate issuance;
+* certificate validation;
+* public-key matching;
+* PEM and DER parsing.
+
+## `keystone-roles-anywhere`
+
+AWS protocol behavior:
+
+* `CreateSession` request serialization;
+* AWS4-X509 canonicalization;
+* certificate-header encoding;
+* ECDSA authorization headers;
+* regional endpoint selection;
+* HTTP transport;
+* response validation.
+
+## `keystone-infra`
+
+Infrastructure generation:
+
+* TypeScript CDK templates;
+* trust-anchor generation;
+* Roles Anywhere profile generation;
+* IAM role generation;
+* CloudFormation output parsing;
+* local Keystone profile synchronization.
+
+## `keystone-cli`
+
+Command-line interface and AWS `credential_process` integration.
+
+---
+
+# Suggested Dependencies
+
+Exact versions should be pinned after the first successful prototype.
+
+```toml
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+fs2 = "0.4"
+hex = "0.4"
+http = "1"
+rand_core = "0.6"
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
+rustls = "0.23"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+time = { version = "0.3", features = [
+    "formatting",
+    "parsing",
+    "serde",
+] }
+toml = "0.8"
+url = "2"
+x509-cert = "0.2"
+zeroize = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cryptokit-rs = "0.2"
+security-framework = "3"
+core-foundation = "0.10"
+```
+
+Prefer `cryptokit-rs` for Secure Enclave key operations and a narrow use of `security-framework` for Keychain integration.
+
+---
+
+# Terminology
+
+## Keystone identity
+
+A Secure Enclave private key and its corresponding public metadata.
+
+## Keystone profile
+
+A local named configuration connecting one Keystone identity to one IAM Roles Anywhere profile and IAM role.
+
+## Roles Anywhere profile
+
+An AWS resource listing the IAM roles that may be requested through a `CreateSession` operation.
+
+## Trust anchor
+
+An AWS IAM Roles Anywhere resource containing either:
+
+* an AWS Private CA reference; or
+* a public external CA certificate.
+
+AWS supports trust anchors based on uploaded external CA certificates.
+
+## Ephemeral CA
+
+A CA private key that exists only during Keystone bootstrap, issues one device certificate, and is then destroyed.
+
+The CA certificate remains public and is registered as the IAM Roles Anywhere trust anchor.
+
+---
+
+# CLI Overview
+
+```text
+keystone init
+keystone bootstrap
+keystone enroll csr
+keystone enroll install
+keystone inspect
+keystone credential-process
+keystone test
+keystone doctor
+keystone rotate
+keystone revoke
+keystone profiles
+keystone infra cdk init
+keystone infra cdk print
+keystone infra cdk render
+keystone infra cdk sync-profile
+```
+
+---
+
+# Configuration
+
+Default configuration file:
+
+```text
+~/Library/Application Support/Keystone/config.toml
+```
+
+Example:
+
+```toml
+version = 1
+
+[profiles.personal]
+region = "us-east-1"
+
+trust_anchor_arn = "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/..."
+roles_anywhere_profile_arn = "arn:aws:rolesanywhere:us-east-1:123456789012:profile/..."
+role_arn = "arn:aws:iam::123456789012:role/KeystonePersonalMac"
+
+role_session_name = "erik-macbook"
+duration_seconds = 3600
+
+key_id = "019c..."
+certificate_fingerprint_sha256 = "7f2c..."
+ca_fingerprint_sha256 = "4c91..."
+
+refresh_before_seconds = 300
+connect_timeout_seconds = 5
+request_timeout_seconds = 20
+
+key_accessibility = "after-first-unlock"
+
+[profiles.personal.issuer]
+mode = "ephemeral-ca"
+renewable = false
+trust_anchor_rotation_required = true
+certificate_expires_at = "2031-07-25T00:00:00Z"
+```
+
+Configuration contains no:
+
+* AWS access key;
+* AWS secret access key;
+* AWS session token;
+* private-key scalar;
+* CA private key.
+
+Recommended permissions:
+
+```text
+directory: 0700
+config:    0600
+```
+
+Keystone should reject configuration files writable by another user unless the caller explicitly provides an unsafe override.
+
+---
+
+# Local Data Layout
+
+```text
+~/Library/Application Support/Keystone/
+├── config.toml
+├── identities/
+│   └── <key-id>.json
+├── certificates/
+│   └── <certificate-fingerprint>/
+│       ├── leaf.der
+│       └── ca.der
+└── generated/
+    └── <profile>/
+```
+
+Cache location:
+
+```text
+~/Library/Caches/Keystone/
+├── credentials/
+└── locks/
+```
+
+## Identity metadata
+
+```json
+{
+  "version": 1,
+  "key_id": "019c...",
+  "key_type": "secure-enclave-p256-signing",
+  "public_key_sec1": "base64...",
+  "public_key_fingerprint_sha256": "7f2c...",
+  "opaque_key_reference": "base64...",
+  "created_at": "2026-07-25T22:00:00Z"
+}
+```
+
+The opaque key reference is not an exported private scalar, but it should still be protected against replacement and deletion.
+
+---
+
+# Secure Enclave Identity
+
+## Key requirements
+
+```text
+Curve: P-256
+Operation: ECDSA signing
+Storage: Secure Enclave
+Exportable: no
+Device-bound: yes
+Biometric prompt: no
+```
+
+The key used for AWS authentication should be dedicated to Keystone.
+
+Do not reuse a key used for:
+
+* ECDH;
+* document signatures;
+* SSH;
+* application payload signatures;
+* unrelated authentication protocols.
+
+## Access policy
+
+Recommended default:
+
+```text
+private-key usage
+after first unlock
+this device only
+no user-presence requirement
+```
+
+Supported configuration:
+
+```toml
+key_accessibility = "after-first-unlock"
+```
+
+or:
+
+```toml
+key_accessibility = "when-unlocked"
+```
+
+### `after-first-unlock`
+
+Allows credential refresh after the user has logged in once following boot, including while the screen is later locked.
+
+Best for unattended agents.
+
+### `when-unlocked`
+
+Allows signing only while the device is unlocked.
+
+Best for interactive developer workflows.
+
+Keystone must not silently add biometric or user-presence requirements.
+
+---
+
+# Signing Interface
+
+Avoid an ambiguous `sign` API.
+
+```rust
+pub trait KeystoneSigningIdentity {
+    fn key_id(&self) -> &KeyId;
+
+    fn public_key_sec1(
+        &self,
+    ) -> Result<[u8; 65], KeystoneError>;
+
+    fn sign_message_ecdsa_sha256(
+        &self,
+        message: &[u8],
+    ) -> Result<DerEcdsaSignature, KeystoneError>;
+}
+```
+
+The implementation must establish whether the selected CryptoKit API accepts:
+
+* the original message and hashes internally; or
+* a precomputed SHA-256 digest.
+
+Do not accidentally hash the Roles Anywhere string-to-sign twice.
+
+If both modes are exposed, use distinct methods:
+
+```rust
+fn sign_message_ecdsa_sha256(...)
+fn sign_prehashed_sha256(...)
+```
+
+---
+
+# `keystone init`
+
+Create a local Secure Enclave identity without issuing a certificate.
+
+```bash
+keystone init --profile personal
+```
+
+Steps:
+
+1. Verify that the Secure Enclave is available.
+2. Generate a P-256 signing key.
+3. Configure unattended access control.
+4. Persist the opaque Secure Enclave key reference.
+5. Export the 65-byte SEC1 public key.
+6. Compute a SHA-256 public-key fingerprint.
+7. Generate a random Keystone key ID.
+8. Create a local profile stub.
+9. Print the next enrollment step.
+
+Example output:
+
+```text
+Created Keystone identity: personal
+Key backend: Secure Enclave
+Algorithm: P-256 ECDSA
+Key ID: 019c...
+Fingerprint: SHA256:7f2c...
+Certificate status: not enrolled
+```
+
+---
+
+# Device Certificate
+
+The Keystone device certificate should contain:
+
+```text
+Version: X.509 v3
+Public key: P-256
+Basic constraints: critical, CA=false
+Key usage: critical, digitalSignature
+Signature: ecdsa-with-SHA256
+```
+
+IAM Roles Anywhere requires an X.509 v3 end-entity certificate that permits digital signatures and is not a CA certificate.
+
+Suggested subject:
+
+```text
+CN=<device-name>
+OU=Keystone Devices
+O=<organization>
+```
+
+Required subject alternative name:
+
+```text
+URI:urn:keystone:device:<key-id>
+```
+
+Example:
+
+```text
+URI:urn:keystone:device:019c1f0e-32a1-7cab-a4f2-...
+```
+
+The URI SAN is the preferred stable identity value used in IAM trust-policy conditions.
+
+Display-oriented fields such as `CN` should not be the primary authorization mechanism.
+
+---
+
+# CSR Enrollment
+
+Keystone can generate a PKCS#10 CSR for an existing CA.
+
+```bash
+keystone enroll csr \
+    --profile personal \
+    --subject "CN=erik-macbook,OU=Keystone Devices,O=Karulf" \
+    --san-uri "urn:keystone:device:019c..." \
+    --output erik-macbook.csr
+```
+
+Flow:
+
+```text
+Secure Enclave key
+      │
+      ├── export public key
+      ├── construct CertificationRequestInfo
+      └── sign CertificationRequestInfo
+                │
+                ▼
+             PKCS#10 CSR
+```
+
+The CSR signature algorithm is:
+
+```text
+ecdsa-with-SHA256
+```
+
+Keystone should verify the CSR signature before writing the file.
+
+---
+
+# Certificate Installation
+
+```bash
+keystone enroll install \
+    --profile personal \
+    --certificate leaf.pem \
+    --chain issuer.pem
+```
+
+Validation:
+
+1. Parse the certificate.
+2. Confirm X.509 version 3.
+3. Confirm P-256 public key.
+4. Confirm `digitalSignature` key usage.
+5. Confirm `CA=false`.
+6. Confirm certificate validity.
+7. Confirm the public key exactly matches the Secure Enclave key.
+8. Confirm the expected Keystone URI SAN exists.
+9. Validate the supplied issuer chain.
+10. Store public certificate material.
+11. Record certificate fingerprints and expiration.
+
+A V0 implementation may store public DER certificate files locally rather than constructing a native Keychain identity.
+
+---
+
+# Ephemeral CA Bootstrap
+
+## Purpose
+
+For a small Keystone installation, running a permanent private CA or paying for AWS Private CA is unnecessary.
+
+Keystone can generate a one-shot CA, issue one device certificate, and destroy the CA private key.
+
+```text
+Temporary software CA private key
+            │
+            ├── creates self-signed CA certificate
+            ├── signs Keystone device certificate
+            └── is destroyed
+
+Persistent:
+    public CA certificate
+    public device certificate
+    Secure Enclave device key
+```
+
+## Command
+
+```bash
+keystone bootstrap \
+    --profile personal \
+    --ca-mode ephemeral \
+    --device-name erik-macbook \
+    --leaf-validity 5y \
+    --ca-validity 10y \
+    --generate-cdk ./keystone-infra
+```
+
+## Bootstrap sequence
+
+1. Generate the Secure Enclave P-256 signing key.
+2. Generate a temporary software P-256 CA key.
+3. Create a self-signed CA certificate.
+4. Construct the Keystone device certificate.
+5. Sign the device certificate with the CA.
+6. Verify the leaf certificate and chain.
+7. Verify the leaf public key matches the Secure Enclave key.
+8. Persist only public certificate material.
+9. Generate the CDK project.
+10. Zeroize the CA private scalar.
+11. Exit the short-lived bootstrap process.
+
+## CA certificate
+
+```text
+Subject:
+  CN=Keystone Ephemeral CA <key-id>
+
+Basic Constraints:
+  critical
+  CA=true
+  pathLen=0
+
+Key Usage:
+  critical
+  keyCertSign
+  cRLSign
+
+Public key:
+  P-256
+
+Signature:
+  ecdsa-with-SHA256
+
+Validity:
+  configurable, default 10 years
+```
+
+## Device certificate
+
+```text
+Subject:
+  CN=<device-name>
+  OU=Keystone Devices
+
+Subject Alternative Name:
+  URI=urn:keystone:device:<key-id>
+
+Basic Constraints:
+  critical
+  CA=false
+
+Key Usage:
+  critical
+  digitalSignature
+
+Public key:
+  Secure Enclave P-256 public key
+
+Signature:
+  ecdsa-with-SHA256
+
+Validity:
+  configurable, default 5 years
+```
+
+## CA private-key handling
+
+The CA key must not be written to the ordinary filesystem.
+
+Preferred implementation:
+
+```text
+parent Keystone process
+        │
+        ▼
+short-lived bootstrap worker
+        │
+        ├── generates CA key
+        ├── signs certificates
+        ├── returns public artifacts
+        ├── zeroizes private scalar
+        └── exits
+```
+
+Perfect deletion from process memory cannot be proven on a general-purpose OS, but a short-lived process and explicit zeroization significantly reduce persistence.
+
+## Output
+
+```text
+keystone-bootstrap/
+├── ca-certificate.pem
+├── device-certificate.pem
+├── device-chain.pem
+├── bootstrap-manifest.json
+├── keystone-profile.toml
+└── cdk/
+```
+
+The final output must not contain:
+
+```text
+ca-private-key.pem
+```
+
+---
+
+# Ephemeral CA Tradeoffs
+
+## Benefits
+
+* no AWS Private CA monthly fee;
+* no online CA;
+* no long-lived CA private key;
+* one-device trust boundary;
+* simple revocation by disabling the trust anchor;
+* small operational footprint.
+
+## Limitations
+
+* the device certificate cannot be renewed;
+* a new chain and trust anchor are required for rotation;
+* a CRL cannot be updated after the CA key is destroyed;
+* each device consumes one trust anchor;
+* the CA must remain valid longer than the leaf certificate.
+
+IAM Roles Anywhere trust anchors are regional resources. The default trust-anchor quota should be checked before using one CA per device; AWS currently documents IAM Roles Anywhere quotas per account and Region.
+
+For larger fleets, use:
+
+```text
+offline organizational CA
+    └── many Keystone device certificates
+```
+
+rather than one trust anchor per device.
+
+---
+
+# Revocation Model
+
+For a one-device ephemeral CA, revocation means disabling or deleting the associated trust anchor.
+
+```text
+device lost or compromised
+        │
+        ▼
+disable IAM Roles Anywhere trust anchor
+        │
+        ▼
+new CreateSession requests fail
+```
+
+Already-issued AWS credentials remain valid until their expiration.
+
+Recommended session duration:
+
+```text
+3600 seconds
+```
+
+For emergency response, also consider:
+
+* disabling the Roles Anywhere profile;
+* removing the IAM role from the profile;
+* modifying the role trust policy;
+* revoking active application access where possible.
+
+---
+
+# Rotation
+
+An identity issued by a destroyed CA cannot be renewed.
+
+Rotation creates a new identity chain:
+
+```text
+new Secure Enclave key
+        +
+new ephemeral CA
+        +
+new device certificate
+        +
+new IAM trust anchor
+```
+
+Command:
+
+```bash
+keystone rotate \
+    --profile personal \
+    --ca-mode ephemeral \
+    --generate-cdk ./keystone-rotation
+```
+
+Safe sequence:
+
+1. Generate a new Secure Enclave key.
+2. Generate a new ephemeral CA.
+3. Issue a new device certificate.
+4. Deploy a second trust anchor.
+5. Add or deploy the new Roles Anywhere profile.
+6. Test `CreateSession`.
+7. Atomically switch the local Keystone profile.
+8. Disable the old trust anchor.
+9. Retain it briefly for rollback.
+10. Delete the old trust anchor and local key reference.
+
+Keystone should warn before expiry:
+
+```text
+Certificate expires in 90 days.
+
+This certificate was issued by a destroyed ephemeral CA and cannot
+be renewed. Run:
+
+    keystone rotate --profile personal
+```
+
+---
+
+# IAM Roles Anywhere Resources
+
+A Keystone deployment requires:
+
+1. a trust anchor;
+2. an IAM role;
+3. an IAM Roles Anywhere profile.
+
+IAM Roles Anywhere checks that the attached certificate chains to a configured trust anchor and that the request signature validates against the leaf certificate.
+
+## Trust anchor
+
+For the ephemeral CA model, the trust anchor source is:
+
+```text
+CERTIFICATE_BUNDLE
+```
+
+containing the public CA certificate.
+
+## IAM role
+
+The role trusts:
+
+```text
+rolesanywhere.amazonaws.com
+```
+
+The role trust policy should restrict access by:
+
+* trust-anchor ARN;
+* AWS account;
+* mapped device URI SAN.
+
+## Roles Anywhere profile
+
+The profile specifies:
+
+* allowed IAM role ARNs;
+* credential duration;
+* whether custom role-session names are accepted;
+* certificate attribute mappings;
+* optional session policies.
+
+The AWS CDK currently exposes Roles Anywhere through generated L1 constructs, including `CfnTrustAnchor` and `CfnProfile`.
+
+---
+
+# AWS4-X509 Signing
+
+IAM Roles Anywhere uses a SigV4-like signing process.
+
+For a P-256 certificate:
+
+```text
+AWS4-X509-ECDSA-SHA256
+```
+
+AWS places the certificate serial number in the credential field where a normal SigV4 request would contain the access-key ID.
+
+## CreateSession endpoint
+
+Conceptually:
+
+```text
+POST https://rolesanywhere.<region>.amazonaws.com/sessions
+```
+
+The exact endpoint should be selected using an AWS endpoint ruleset or a tested partition table.
+
+## Request body
+
+Conceptually:
+
+```json
+{
+  "profileArn": "arn:aws:rolesanywhere:us-east-1:123456789012:profile/...",
+  "roleArn": "arn:aws:iam::123456789012:role/KeystonePersonalMac",
+  "trustAnchorArn": "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/...",
+  "durationSeconds": 3600,
+  "roleSessionName": "erik-macbook"
+}
+```
+
+Serialize the body once.
+
+The exact serialized bytes must be:
+
+* hashed for the canonical request; and
+* sent as the HTTP request body.
+
+## Required headers
+
+The final header set should follow the current Roles Anywhere specification and official helper implementation.
+
+It will include values such as:
+
+```text
+content-type
+host
+x-amz-date
+x-amz-x509
+x-amz-x509-chain
+authorization
+```
+
+Certificate encoding, chain order, and header canonicalization should be ported from the official AWS helper rather than inferred.
+
+## Canonical request
+
+```text
+CanonicalRequest =
+    HTTPMethod + "\n" +
+    CanonicalURI + "\n" +
+    CanonicalQueryString + "\n" +
+    CanonicalHeaders + "\n" +
+    SignedHeaders + "\n" +
+    HexLower(SHA256(RequestBody))
+```
+
+For `CreateSession`:
+
+```text
+HTTPMethod = POST
+CanonicalURI = /sessions
+```
+
+## Credential scope
+
+```text
+YYYYMMDD/<region>/rolesanywhere/aws4_request
+```
+
+## String to sign
+
+```text
+StringToSign =
+    "AWS4-X509-ECDSA-SHA256" + "\n" +
+    AmzDate + "\n" +
+    CredentialScope + "\n" +
+    HexLower(SHA256(CanonicalRequest))
+```
+
+## Secure Enclave operation
+
+```text
+signature_der =
+    ECDSA-P256-SHA256(
+        Secure Enclave private key,
+        StringToSign
+    )
+```
+
+## Authorization header
+
+Conceptually:
+
+```text
+Authorization:
+AWS4-X509-ECDSA-SHA256
+Credential=<decimal-certificate-serial>/<scope>,
+SignedHeaders=<signed-header-list>,
+Signature=<hex-encoded-signature>
+```
+
+The implementation must verify whether the DER-encoded ECDSA signature is hex-encoded directly. This behavior should be copied from the official helper and covered by golden tests.
+
+---
+
+# Do Not Reimplement AWS Canonicalization Blindly
+
+The recommended implementation strategy is:
+
+1. Inspect the official `aws_signing_helper` source.
+2. Port its Roles Anywhere canonicalization.
+3. Port its certificate-header construction.
+4. Port its authorization-header construction.
+5. Replace only the private-key backend.
+6. Compare Keystone output against the official helper.
+7. maintain golden request fixtures.
+
+Keystone’s novel security boundary should be the Secure Enclave signer, not a novel AWS signing implementation.
+
+---
+
+# Internal Roles Anywhere Interfaces
+
+```rust
+pub trait AwsX509Identity {
+    fn certificate_serial_decimal(
+        &self,
+    ) -> Result<String, KeystoneError>;
+
+    fn leaf_certificate_der(&self) -> &[u8];
+
+    fn certificate_chain_der(&self) -> &[Vec<u8>];
+
+    fn sign_string_to_sign(
+        &self,
+        string_to_sign: &[u8],
+    ) -> Result<Vec<u8>, KeystoneError>;
+}
+```
+
+```rust
+pub struct RolesAnywhereRequestSigner<I> {
+    identity: I,
+    region: String,
+    clock: Arc<dyn Clock>,
+}
+```
+
+```rust
+pub struct CreateSessionRequest {
+    pub profile_arn: String,
+    pub role_arn: String,
+    pub trust_anchor_arn: String,
+    pub duration_seconds: u32,
+    pub role_session_name: Option<String>,
+}
+```
+
+---
+
+# `keystone credential-process`
+
+Command:
+
+```bash
+keystone credential-process --profile personal
+```
+
+Output must follow the AWS process credential-provider contract:
+
+```json
+{
+  "Version": 1,
+  "AccessKeyId": "ASIA...",
+  "SecretAccessKey": "...",
+  "SessionToken": "...",
+  "Expiration": "2026-07-26T01:15:00Z"
+}
+```
+
+Rules:
+
+* credential JSON is the only content written to standard output;
+* diagnostics go to standard error;
+* successful output ends with a newline;
+* credential values are never logged;
+* failures exit nonzero;
+* no partial JSON is written on failure.
+
+## AWS configuration
+
+```ini
+[profile keystone-personal]
+credential_process = /usr/local/bin/keystone credential-process --profile personal
+region = us-east-1
+```
+
+Usage:
+
+```bash
+AWS_PROFILE=keystone-personal aws sts get-caller-identity
+```
+
+Applications using normal AWS SDK credential resolution can use the same profile.
+
+---
+
+# Credential Response Types
+
+```rust
+pub struct AwsSessionCredentials {
+    pub access_key_id: String,
+    pub secret_access_key: Zeroizing<String>,
+    pub session_token: Zeroizing<String>,
+    pub expiration: OffsetDateTime,
+}
+```
+
+```rust
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct CredentialProcessOutput {
+    pub version: u8,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: String,
+    pub expiration: String,
+}
+```
+
+The output `Version` is:
+
+```text
+1
+```
+
+Keystone should verify:
+
+* access-key ID is nonempty;
+* secret access key is nonempty;
+* session token is nonempty;
+* expiration is in the future;
+* the returned role is compatible with the requested role, when that metadata is available.
+
+---
+
+# Credential Caching
+
+## V0
+
+The simplest secure behavior is no persistent cache.
+
+Each invocation of:
+
+```text
+keystone credential-process
+```
+
+performs a new Roles Anywhere exchange.
+
+The AWS SDK caches returned credentials in the calling process until refresh is required.
+
+## V1
+
+Add a Keychain-backed credential cache.
+
+Avoid storing session credentials in plaintext JSON unless explicitly configured.
+
+Cache lookup:
+
+```text
+if now < expiration - refresh_before:
+    return cached credentials
+else:
+    refresh
+```
+
+Default:
+
+```text
+refresh_before = 5 minutes
+```
+
+## Concurrent refresh
+
+Use a per-profile lock:
+
+```text
+~/Library/Caches/Keystone/locks/<profile>.lock
+```
+
+Flow:
+
+1. Read cache.
+2. Return if sufficiently fresh.
+3. Acquire profile lock.
+4. Read cache again.
+5. Return if another process refreshed it.
+6. Call Roles Anywhere.
+7. Atomically update cache.
+8. Release lock.
+
+A refresh failure should not discard cached credentials that are still valid.
+
+---
+
+# Clock Handling
+
+AWS request signing is time-sensitive.
+
+Keystone should:
+
+* use UTC;
+* capture one timestamp per signing attempt;
+* use that timestamp consistently;
+* detect obviously invalid local clock values;
+* distinguish clock-skew failures from certificate failures;
+* avoid infinite retries.
+
+Example:
+
+```text
+IAM Roles Anywhere rejected the signature timestamp.
+
+Check macOS System Settings > General > Date & Time and confirm that
+automatic time synchronization is enabled.
+```
+
+---
+
+# HTTP Behavior
+
+Requirements:
+
+* TLS 1.2 or newer;
+* normal certificate validation;
+* no insecure TLS option;
+* bounded connect timeout;
+* bounded request timeout;
+* redirects disabled;
+* request body serialized once;
+* transient retries only;
+* credentials and authorization headers redacted.
+
+Recommended retryable failures:
+
+```text
+HTTP 429
+HTTP 500
+HTTP 502
+HTTP 503
+HTTP 504
+connection reset
+temporary DNS failure
+```
+
+Maximum attempts:
+
+```text
+3
+```
+
+Use exponential backoff with jitter.
+
+Do not automatically retry:
+
+```text
+HTTP 400
+HTTP 401
+HTTP 403
+invalid certificate
+expired certificate
+invalid signature
+invalid role
+invalid profile
+```
+
+Each retry should build and sign a fresh request with a current timestamp.
+
+---
+
+# `keystone inspect`
+
+```bash
+keystone inspect --profile personal
+```
+
+Example output:
+
+```text
+Profile: personal
+Key backend: macOS Secure Enclave
+Key algorithm: P-256 ECDSA
+Key ID: 019c...
+Public-key fingerprint: SHA256:7f2c...
+
+Certificate subject: CN=erik-macbook
+Certificate issuer: CN=Keystone Ephemeral CA 019c...
+Certificate serial: 4837201
+Certificate expires: 2031-07-25T00:00:00Z
+Certificate SAN: urn:keystone:device:019c...
+
+Issuer mode: ephemeral-ca
+Renewable: no
+Trust-anchor rotation required: yes
+
+AWS region: us-east-1
+Trust-anchor ARN: arn:aws:rolesanywhere:...
+Roles Anywhere profile ARN: arn:aws:rolesanywhere:...
+Role ARN: arn:aws:iam::...
+```
+
+No secret data should be printed.
+
+---
+
+# `keystone test`
+
+```bash
+keystone test --profile personal
+```
+
+The command:
+
+1. validates the local identity;
+2. creates a Roles Anywhere session;
+3. validates the returned credentials;
+4. optionally calls `sts:GetCallerIdentity`;
+5. prints the resulting ARN and expiration;
+6. never prints credential secrets.
+
+Example:
+
+```text
+IAM Roles Anywhere authentication succeeded.
+
+Caller ARN:
+arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/erik-macbook
+
+Credentials expire:
+2026-07-26T01:15:00Z
+```
+
+---
+
+# `keystone doctor`
+
+Checks:
+
+* Secure Enclave availability;
+* key restoration;
+* unattended signing;
+* configuration permissions;
+* certificate parsing;
+* certificate validity;
+* certificate/key match;
+* CA chain validation;
+* URI SAN presence;
+* endpoint reachability;
+* local clock;
+* Roles Anywhere authentication;
+* AWS shared-config integration;
+* certificate expiration;
+* trust-anchor configuration.
+
+---
+
+# CDK Generation
+
+Keystone should generate the infrastructure required to connect a local Keystone profile to IAM Roles Anywhere.
+
+## Commands
+
+```text
+keystone infra cdk init
+keystone infra cdk print
+keystone infra cdk render
+keystone infra cdk sync-profile
+```
+
+## `keystone infra cdk init`
+
+Generate a complete TypeScript CDK application:
+
+```bash
+keystone infra cdk init \
+    --profile personal \
+    --output ./keystone-infra \
+    --stack-name KeystonePersonal \
+    --role-name KeystonePersonalMac
+```
+
+For an ephemeral CA profile, Keystone already knows:
+
+* the public CA certificate;
+* device URI SAN;
+* Keystone key ID;
+* certificate fingerprints;
+* target AWS region.
+
+No CA ARN is required.
+
+## Generated project
+
+```text
+keystone-infra/
+├── bin/
+│   └── keystone-infra.ts
+├── lib/
+│   └── keystone-personal-stack.ts
+├── test/
+│   └── keystone-personal-stack.test.ts
+├── certificates/
+│   └── keystone-ca.pem
+├── cdk.json
+├── package.json
+├── tsconfig.json
+├── README.md
+└── keystone.profile.toml
+```
+
+The project contains only public certificate data.
+
+---
+
+# Generated CDK Resources
+
+The generated stack creates:
+
+* `AWS::RolesAnywhere::TrustAnchor`;
+* `AWS::RolesAnywhere::Profile`;
+* `AWS::IAM::Role`;
+* CloudFormation outputs.
+
+## Trust anchor
+
+```typescript
+const trustAnchor =
+  new rolesanywhere.CfnTrustAnchor(
+    this,
+    "KeystoneTrustAnchor",
+    {
+      name: props.trustAnchorName,
+      enabled: true,
+      source: {
+        sourceType: "CERTIFICATE_BUNDLE",
+        sourceData: {
+          x509CertificateData:
+            caCertificatePem,
+        },
+      },
+    },
+  );
+```
+
+The CA certificate is public and may be embedded in the synthesized CloudFormation template.
+
+## IAM principal
+
+```typescript
+const principal =
+  new iam.ServicePrincipal(
+    "rolesanywhere.amazonaws.com",
+    {
+      conditions: {
+        ArnEquals: {
+          "aws:SourceArn":
+            trustAnchor.attrTrustAnchorArn,
+        },
+        StringEquals: {
+          "aws:SourceAccount":
+            Stack.of(this).account,
+        },
+      },
+    },
+  );
+```
+
+Certificate-specific authorization should also be applied through IAM Roles Anywhere certificate attribute mappings and principal tags.
+
+The exact tag key must be validated against the current AWS attribute-mapping behavior.
+
+## IAM role
+
+```typescript
+const role = new iam.Role(
+  this,
+  "KeystoneRole",
+  {
+    roleName: props.roleName,
+    assumedBy: principal,
+    maxSessionDuration: Duration.seconds(
+      props.sessionDurationSeconds,
+    ),
+  },
+);
+```
+
+The generated role must not default to administrator permissions.
+
+## Roles Anywhere profile
+
+```typescript
+const rolesAnywhereProfile =
+  new rolesanywhere.CfnProfile(
+    this,
+    "KeystoneRolesAnywhereProfile",
+    {
+      name: props.profileName,
+      enabled: true,
+      durationSeconds:
+        props.sessionDurationSeconds,
+      roleArns: [role.roleArn],
+      acceptRoleSessionName: true,
+      requireInstanceProperties: false,
+      attributeMappings: [
+        {
+          certificateField: "x509SAN",
+          mappingRules: [
+            {
+              specifier: "URI",
+            },
+          ],
+        },
+      ],
+    },
+  );
+```
+
+## Device authorization
+
+The generated IAM trust policy should require the device URI SAN after it has been mapped to a session principal tag:
+
+```text
+urn:keystone:device:<key-id>
+```
+
+Conceptually:
+
+```typescript
+{
+  StringEquals: {
+    "aws:PrincipalTag/x509SAN/URI":
+      props.deviceSanUri,
+  },
+}
+```
+
+The generated code should contain a warning that the exact condition key must match the selected Roles Anywhere attribute mapping.
+
+---
+
+# CDK Permission Modes
+
+## Empty role
+
+Default:
+
+```bash
+keystone infra cdk init \
+    --profile personal \
+    --permissions none
+```
+
+The generated role contains no workload permissions.
+
+## Inline policy
+
+```bash
+keystone infra cdk init \
+    --profile personal \
+    --policy ./policy.json
+```
+
+## Managed policy
+
+```bash
+keystone infra cdk init \
+    --profile personal \
+    --managed-policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+```
+
+Keystone must never attach:
+
+```text
+AdministratorAccess
+```
+
+by default.
+
+---
+
+# Existing Role Mode
+
+```bash
+keystone infra cdk init \
+    --profile personal \
+    --existing-role-arn arn:aws:iam::123456789012:role/Developer
+```
+
+The generated stack creates:
+
+* the trust anchor;
+* the Roles Anywhere profile;
+* CloudFormation outputs.
+
+It does not automatically modify an externally managed role.
+
+The generated README should provide the trust-policy statement that must be added to the existing role.
+
+---
+
+# Existing Trust Anchor Mode
+
+For an organization with an existing CA:
+
+```bash
+keystone infra cdk init \
+    --profile personal \
+    --existing-trust-anchor-arn arn:aws:rolesanywhere:...
+```
+
+This mode omits trust-anchor creation.
+
+Recommended larger-scale model:
+
+```text
+one offline CA
+one trust anchor per environment
+many Keystone device certificates
+one or more Roles Anywhere profiles
+device SAN restrictions in IAM policies
+```
+
+---
+
+# Generated Outputs
+
+```typescript
+new CfnOutput(this, "TrustAnchorArn", {
+  value: trustAnchor.attrTrustAnchorArn,
+});
+
+new CfnOutput(
+  this,
+  "RolesAnywhereProfileArn",
+  {
+    value:
+      rolesAnywhereProfile.attrProfileArn,
+  },
+);
+
+new CfnOutput(this, "RoleArn", {
+  value: role.roleArn,
+});
+
+new CfnOutput(this, "Region", {
+  value: Stack.of(this).region,
+});
+
+new CfnOutput(this, "KeystoneKeyId", {
+  value: props.keystoneKeyId,
+});
+
+new CfnOutput(this, "DeviceSanUri", {
+  value: props.deviceSanUri,
+});
+```
+
+Deployment:
+
+```bash
+npm install
+npx cdk synth
+npx cdk diff
+npx cdk deploy \
+    --outputs-file cdk-outputs.json
+```
+
+Keystone source generation must not automatically run `cdk deploy`.
+
+---
+
+# Profile Synchronization
+
+```bash
+keystone infra cdk sync-profile \
+    --profile personal \
+    --outputs ./cdk-outputs.json
+```
+
+The command reads:
+
+* `TrustAnchorArn`;
+* `RolesAnywhereProfileArn`;
+* `RoleArn`;
+* `Region`.
+
+It updates the local profile:
+
+```toml
+[profiles.personal]
+region = "us-east-1"
+trust_anchor_arn = "arn:aws:rolesanywhere:..."
+roles_anywhere_profile_arn = "arn:aws:rolesanywhere:..."
+role_arn = "arn:aws:iam::..."
+```
+
+Rules:
+
+* update placeholders automatically;
+* preserve matching values;
+* reject conflicting existing values;
+* require `--force` to overwrite conflicts;
+* write the configuration atomically.
+
+---
+
+# CDK Template Strategy
+
+Store versioned embedded templates:
+
+```text
+templates/
+└── cdk-typescript-v1/
+    ├── package.json.tera
+    ├── tsconfig.json.tera
+    ├── cdk.json.tera
+    ├── bin/app.ts.tera
+    ├── lib/stack.ts.tera
+    ├── test/stack.test.ts.tera
+    ├── README.md.tera
+    └── keystone.profile.toml.tera
+```
+
+Generated metadata:
+
+```json
+{
+  "generatedBy": "keystone",
+  "generatorVersion": "0.1.0",
+  "templateVersion": 1,
+  "generatedAt": "2026-07-25T23:00:00Z"
+}
+```
+
+Do not overwrite modified generated files without `--force`.
+
+---
+
+# Generated CDK Tests
+
+The generated CDK app should test that:
+
+* one trust anchor exists;
+* the trust anchor uses the expected CA certificate;
+* one Roles Anywhere profile exists;
+* the profile references the intended role;
+* the profile has the configured duration;
+* the IAM role trusts `rolesanywhere.amazonaws.com`;
+* the role trust policy references the trust anchor;
+* the device SAN restriction is present;
+* no administrator policy is attached.
+
+Example:
+
+```typescript
+template.hasResourceProperties(
+  "AWS::RolesAnywhere::Profile",
+  {
+    Enabled: true,
+    DurationSeconds: 3600,
+  },
+);
+
+template.hasResourceProperties(
+  "AWS::IAM::Role",
+  {
+    AssumeRolePolicyDocument:
+      Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Principal: {
+              Service:
+                "rolesanywhere.amazonaws.com",
+            },
+          }),
+        ]),
+      }),
+  },
+);
+```
+
+---
+
+# CLI Types
+
+```rust
+#[derive(clap::Subcommand)]
+pub enum Command {
+    Init(InitArgs),
+    Bootstrap(BootstrapArgs),
+    Enroll(EnrollCommand),
+    CredentialProcess(CredentialProcessArgs),
+    Inspect(ProfileArgs),
+    Test(ProfileArgs),
+    Doctor(ProfileArgs),
+    Rotate(RotateArgs),
+    Revoke(ProfileArgs),
+    Profiles,
+    Infra(InfraCommand),
+}
+```
+
+```rust
+#[derive(clap::Subcommand)]
+pub enum InfraCommand {
+    Cdk(CdkCommand),
+}
+```
+
+```rust
+#[derive(clap::Subcommand)]
+pub enum CdkCommand {
+    Init(CdkInitArgs),
+    Print(CdkPrintArgs),
+    Render(CdkRenderArgs),
+    SyncProfile(CdkSyncProfileArgs),
+}
+```
+
+```rust
+#[derive(clap::Args)]
+pub struct CdkInitArgs {
+    #[arg(long)]
+    pub profile: Vec<String>,
+
+    #[arg(long)]
+    pub output: PathBuf,
+
+    #[arg(long)]
+    pub stack_name: Option<String>,
+
+    #[arg(long)]
+    pub role_name: Option<String>,
+
+    #[arg(long)]
+    pub existing_trust_anchor_arn:
+        Option<String>,
+
+    #[arg(long)]
+    pub existing_role_arn: Option<String>,
+
+    #[arg(long)]
+    pub policy: Option<PathBuf>,
+
+    #[arg(long)]
+    pub managed_policy_arn: Vec<String>,
+
+    #[arg(
+        long,
+        default_value_t = 3600
+    )]
+    pub duration_seconds: u32,
+
+    #[arg(long)]
+    pub force: bool,
+}
+```
+
+---
+
+# Logging and Redaction
+
+Safe log fields:
+
+* profile name;
+* region;
+* role ARN;
+* certificate fingerprint prefix;
+* certificate expiration;
+* request start and completion;
+* HTTP status;
+* AWS request ID;
+* credential expiration.
+
+Never log:
+
+* secret access keys;
+* session tokens;
+* authorization headers;
+* opaque Secure Enclave key references;
+* CA private keys;
+* complete signed requests in normal operation.
+
+Debug signing output should require:
+
+```bash
+keystone credential-process \
+    --profile personal \
+    --debug-signing \
+    --redact
+```
+
+Even then, authorization signatures and credentials should remain redacted by default.
+
+---
+
+# Error Model
+
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum KeystoneError {
+    #[error("Secure Enclave is not available")]
+    SecureEnclaveUnavailable,
+
+    #[error("Secure Enclave key could not be restored")]
+    KeyUnavailable,
+
+    #[error(
+        "certificate does not match the Secure Enclave public key"
+    )]
+    CertificateKeyMismatch,
+
+    #[error("certificate expired at {0}")]
+    CertificateExpired(OffsetDateTime),
+
+    #[error("certificate is not yet valid")]
+    CertificateNotYetValid,
+
+    #[error("certificate chain is invalid")]
+    InvalidCertificateChain,
+
+    #[error("required Keystone URI SAN is missing")]
+    MissingDeviceSan,
+
+    #[error("invalid Keystone configuration: {0}")]
+    InvalidConfiguration(String),
+
+    #[error(
+        "IAM Roles Anywhere rejected the request: {status} {code}"
+    )]
+    RolesAnywhereRejected {
+        status: u16,
+        code: String,
+    },
+
+    #[error("system clock may be incorrect")]
+    ClockSkew,
+
+    #[error("temporary credential response was malformed")]
+    InvalidCredentialResponse,
+
+    #[error("network request failed")]
+    Network(#[source] reqwest::Error),
+}
+```
+
+---
+
+# Testing Strategy
+
+## Unit tests
+
+Test:
+
+* configuration parsing;
+* file permission validation;
+* certificate parsing;
+* public-key matching;
+* URI SAN extraction;
+* certificate serial conversion;
+* canonical URI generation;
+* canonical query generation;
+* canonical header normalization;
+* signed-header ordering;
+* request-body hashing;
+* credential scope;
+* string-to-sign generation;
+* certificate header encoding;
+* authorization-header generation;
+* credential response parsing;
+* cache expiration;
+* CDK output parsing.
+
+## Golden AWS signing tests
+
+Use:
+
+* fixed software P-256 key;
+* fixed certificate;
+* fixed timestamp;
+* fixed Region;
+* fixed request body;
+* fixed ARNs.
+
+Record:
+
+* canonical request;
+* canonical request hash;
+* string to sign;
+* signed-header list;
+* authorization-header structure.
+
+ECDSA may be nondeterministic, so verify signatures cryptographically rather than requiring identical signature bytes.
+
+## Differential tests
+
+Compare Keystone with the official AWS helper using a software key accessible to both.
+
+Compare all pre-signature artifacts:
+
+* request body;
+* canonical request;
+* scope;
+* string to sign;
+* certificate headers.
+
+## Secure Enclave integration tests
+
+On real Apple Silicon hardware:
+
+1. Generate an unattended key.
+2. Sign without a UI prompt.
+3. Restart the process.
+4. Restore and sign again.
+5. Lock the Mac.
+6. Test expected accessibility behavior.
+7. Reboot before first unlock.
+8. Confirm signing fails.
+9. Log in.
+10. Confirm signing succeeds.
+
+## PKI tests
+
+* generated CA validates as a CA;
+* leaf validates against generated CA;
+* leaf cannot sign certificates;
+* leaf key matches the Secure Enclave key;
+* incorrect key is rejected;
+* incorrect SAN is rejected;
+* expired certificate is rejected;
+* malformed chain is rejected;
+* no CA private key appears in the output tree.
+
+## AWS integration tests
+
+Against a dedicated account:
+
+* valid identity succeeds;
+* expired certificate fails;
+* wrong CA fails;
+* wrong trust anchor fails;
+* wrong profile fails;
+* wrong role fails;
+* modified body fails;
+* modified signed header fails;
+* stale timestamp fails;
+* unauthorized SAN fails;
+* returned credentials call `sts:GetCallerIdentity`;
+* disabled trust anchor prevents new sessions.
+
+## CDK tests
+
+* synth succeeds;
+* expected resources exist;
+* external CA bundle is embedded correctly;
+* IAM role has no default admin policy;
+* SAN restriction is present;
+* outputs have expected names;
+* `sync-profile` handles conflicts safely.
+
+---
+
+# Implementation Plan
+
+## Phase 0: AWS protocol spike
+
+Implement Roles Anywhere using:
+
+* a software P-256 key;
+* a test X.509 certificate;
+* the external CA model.
+
+Compare the request against the official AWS helper.
+
+Deliverable:
+
+```text
+software key → CreateSession → temporary credentials
+```
+
+## Phase 1: Secure Enclave signer
+
+Replace the software signer with `cryptokit-rs`.
+
+Deliverable:
+
+```text
+Secure Enclave key → CreateSession
+```
+
+Confirm unattended behavior.
+
+## Phase 2: Local identity
+
+Implement:
+
+```text
+keystone init
+keystone inspect
+keystone doctor
+```
+
+## Phase 3: Ephemeral CA bootstrap
+
+Implement:
+
+```text
+keystone bootstrap --ca-mode ephemeral
+```
+
+Include:
+
+* self-signed CA;
+* leaf issuance;
+* URI SAN;
+* no persisted CA key;
+* bootstrap manifest.
+
+## Phase 4: Credential process
+
+Implement:
+
+```text
+keystone credential-process
+keystone test
+```
+
+Document AWS shared-config integration.
+
+## Phase 5: CDK generation
+
+Implement:
+
+```text
+keystone infra cdk init
+keystone infra cdk print
+keystone infra cdk sync-profile
+```
+
+## Phase 6: Reliability
+
+Add:
+
+* credential cache;
+* interprocess locking;
+* clock diagnostics;
+* certificate-expiration warnings;
+* retry policy;
+* atomic configuration updates.
+
+## Phase 7: Rotation
+
+Implement:
+
+```text
+keystone rotate
+keystone revoke
+```
+
+---
+
+# Minimum Viable Product
+
+The MVP should provide:
+
+```text
+keystone bootstrap
+keystone inspect
+keystone credential-process
+keystone test
+keystone doctor
+
+keystone infra cdk init
+keystone infra cdk sync-profile
+```
+
+The MVP may:
+
+* support Apple Silicon only;
+* support the standard AWS partition only;
+* use one identity per profile;
+* omit persistent credential caching;
+* create one ephemeral CA per identity;
+* create a new IAM role rather than modifying an existing role.
+
+The MVP must not:
+
+* export the Secure Enclave private key;
+* write the CA private key to disk;
+* silently use a software identity;
+* require Touch ID for each credential refresh;
+* print credentials outside `credential-process`;
+* attach administrator permissions;
+* disable TLS validation;
+* automatically deploy CDK infrastructure.
+
+---
+
+# Example End-to-End Workflow
+
+## Bootstrap local identity and certificate
+
+```bash
+keystone bootstrap \
+    --profile personal \
+    --ca-mode ephemeral \
+    --device-name erik-macbook \
+    --leaf-validity 5y \
+    --ca-validity 10y \
+    --generate-cdk ./keystone-infra
+```
+
+## Review generated infrastructure
+
+```bash
+cd keystone-infra
+npm install
+npx cdk synth
+npx cdk diff
+```
+
+## Deploy
+
+```bash
+npx cdk deploy \
+    --outputs-file cdk-outputs.json
+```
+
+## Synchronize the Keystone profile
+
+```bash
+keystone infra cdk sync-profile \
+    --profile personal \
+    --outputs ./cdk-outputs.json
+```
+
+## Test IAM Roles Anywhere
+
+```bash
+keystone test --profile personal
+```
+
+## Configure AWS tooling
+
+```ini
+[profile keystone-personal]
+credential_process = /usr/local/bin/keystone credential-process --profile personal
+region = us-east-1
+```
+
+## Verify
+
+```bash
+AWS_PROFILE=keystone-personal \
+    aws sts get-caller-identity
+```
+
+---
+
+# Key Design Decisions
+
+## Keystone is standalone
+
+Keystone is unrelated to Scranton and can be used by any macOS application or developer workflow.
+
+## Secure Enclave identity
+
+The long-lived private key is device-bound and non-exportable.
+
+## IAM Roles Anywhere
+
+Keystone uses AWS’s existing X.509 workload identity service rather than operating a custom OIDC broker.
+
+## External ephemeral CA by default
+
+A one-shot CA avoids AWS Private CA cost and avoids running permanent PKI infrastructure.
+
+## One CA per device for small installations
+
+The trust anchor becomes the device revocation switch.
+
+For larger deployments, use a shared offline CA and device-specific certificates.
+
+## No biometric prompt for routine use
+
+The default identity is suitable for background credential refresh.
+
+Higher-privilege profiles may later support user-presence keys.
+
+## Standard `credential_process`
+
+Applications need no Keystone-specific AWS SDK integration.
+
+## Official AWS canonicalization
+
+Keystone ports or reuses the official Roles Anywhere helper’s signing behavior.
+
+## CDK generation, not automatic deployment
+
+Keystone emits auditable infrastructure source and leaves deployment under explicit user control.
+
+## No silent fallback
+
+If Secure Enclave signing fails, Keystone fails closed.

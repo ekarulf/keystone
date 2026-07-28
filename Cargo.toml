@@ -1,0 +1,56 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/ekarulf/keystone"
+
+[workspace.dependencies]
+keystone-core = { path = "crates/keystone-core" }
+keystone-macos = { path = "crates/keystone-macos" }
+keystone-pki = { path = "crates/keystone-pki" }
+keystone-roles-anywhere = { path = "crates/keystone-roles-anywhere" }
+keystone-infra = { path = "crates/keystone-infra" }
+
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+# The Secure Enclave binding. Its build script compiles a vendored Swift bridge,
+# so it is a macOS-only, target-gated dependency of `keystone-macos` alone.
+cryptokit-rs = "0.2.5"
+fs2 = "0.4"
+hex = "0.4"
+p256 = { version = "0.13", features = ["ecdsa", "pem"] }
+rand = "0.8"
+rcgen = { version = "0.14", default-features = false, features = [
+    "crypto",
+    "pem",
+    "ring",
+    "x509-parser",
+] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "rustls-tls",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+# Renders the embedded CDK templates. `default-features = false` drops the
+# builtin filters that shell out or fetch, leaving pure text substitution.
+tera = { version = "2", default-features = false }
+thiserror = "2"
+time = { version = "0.3", features = ["formatting", "parsing", "serde", "macros"] }
+toml = "0.8"
+# "verify" pulls in ring so certificate and CSR signatures can actually be
+# checked; comparing issuer and subject names alone would accept a forged chain.
+x509-parser = { version = "0.16", features = ["verify"] }
+zeroize = { version = "1", features = ["derive"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

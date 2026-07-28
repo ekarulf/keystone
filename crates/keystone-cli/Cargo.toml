@@ -1,0 +1,33 @@
+[package]
+name = "keystone-cli"
+description = "The keystone command-line interface"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "keystone"
+path = "src/main.rs"
+
+[dependencies]
+keystone-core.workspace = true
+keystone-infra.workspace = true
+# `keystone-macos` builds on every target: on a non-macOS one its operations
+# return `SecureEnclaveUnavailable`, which is what "no silent fallback" means for
+# a cross-compiled build.
+keystone-macos.workspace = true
+keystone-pki.workspace = true
+keystone-roles-anywhere.workspace = true
+
+clap.workspace = true
+# The per-profile refresh lock. `fs2` is used only for `flock`, so an
+# interrupted refresh releases it when the process dies.
+fs2.workspace = true
+serde_json.workspace = true
+time.workspace = true
+toml.workspace = true
+
+[lints]
+workspace = true

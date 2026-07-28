@@ -1,0 +1,29 @@
+[package]
+name = "keystone-pki"
+description = "X.509 certificate construction, ephemeral CA, and validation for Keystone"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Software test doubles. Never enabled by the CLI: a software key that could
+# stand in for the Secure Enclave at runtime is exactly what the design forbids.
+testing = []
+
+[dependencies]
+keystone-core.workspace = true
+
+base64.workspace = true
+hex.workspace = true
+p256.workspace = true
+rand.workspace = true
+rcgen.workspace = true
+sha2.workspace = true
+time.workspace = true
+x509-parser.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true
