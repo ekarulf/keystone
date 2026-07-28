@@ -132,6 +132,12 @@ Keystone, so the PKI and golden signing suites check Keystone's output against a
 independent implementation. Regenerate them with `tests/fixtures/generate.sh`;
 the issuing CA keys are deleted at the end of that script by design.
 
+The two device private keys under `tests/fixtures/` are committed on purpose and
+authenticate nothing — the golden suite has to sign fixed bytes the way the
+official AWS helper would. Secret scanners flag them. A real Keystone device key
+cannot look like this: it is generated inside the Secure Enclave and has no PEM
+form.
+
 ## Documentation
 
 * [Design document](docs/DESIGN.md) — security model, PKI and ephemeral CA

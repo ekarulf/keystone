@@ -16,6 +16,16 @@
 # the design specifies: nothing in the repository can mint a new certificate for
 # an arbitrary key. Re-run this script to change the fixture set.
 #
+# The two device private keys that DO remain (`device-key.pem` and
+# `other-device-key.pem`) are throwaway test material and are meant to be
+# committed. Secret scanners flag them; they authenticate nothing. The golden
+# suite needs a key it can sign with the way the official AWS helper would, and
+# the whole point of a fixture is that every run signs the same bytes. Neither
+# key has ever been enrolled with a trust anchor, and a Keystone device key
+# cannot be one of these by construction: real keys are generated inside the
+# Secure Enclave and have no PEM form at all. Do not "fix" this by rotating them
+# — that only invalidates the golden expectations.
+#
 # Usage: tests/fixtures/generate.sh
 
 set -euo pipefail
