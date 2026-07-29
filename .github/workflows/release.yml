@@ -45,6 +45,7 @@ jobs:
             os: macos-latest
             target: aarch64-apple-darwin
             binary: keystone
+            archive: tar.gz
           # CNG is part of the OS; nothing beyond the toolchain is needed. The
           # MSVC target is the right one here even though it cannot be
           # cross-compiled from macOS — on a Windows runner the SDK headers
@@ -53,8 +54,12 @@ jobs:
             os: windows-latest
             target: x86_64-pc-windows-msvc
             binary: keystone.exe
+            # Zip rather than tar.gz: Explorer opens it without a third-party
+            # tool, which a `.tar.gz` still needs on Windows 10. The executable
+            # bit that motivates tar on macOS has no meaning for a `.exe`.
+            archive: zip
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install the toolchain
         run: |
@@ -78,7 +83,8 @@ jobs:
 
       # Archived rather than uploaded bare, because `actions/upload-artifact`
       # does not preserve the executable bit and a downloaded `keystone` that
-      # will not run is a confusing first impression.
+      # will not run is a confusing first impression. Each platform gets the
+      # format its users already have a tool for — see `archive` in the matrix.
       - name: Package
         id: package
         run: |
@@ -89,28 +95,41 @@ jobs:
             *) version="$(git rev-parse --short HEAD)" ;;
           esac
           name="keystone-${version}-${{ matrix.target }}"
+          archive="${name}.${{ matrix.archive }}"
           mkdir -p "dist/${name}"
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${name}/"
           cp README.md LICENSE "dist/${name}/"
-          tar -czf "dist/${name}.tar.gz" -C dist "${name}"
-          # For verifying a download; not a signature, and not a substitute for
-          # one. It says the file arrived intact, not that this project produced
-          # it. Written from inside `dist` so the recorded name has no directory
-          # prefix and `-c` works wherever the file is unpacked. macOS has
-          # `shasum` and not `sha256sum`; Git Bash on the Windows runner has
-          # `sha256sum` from coreutils, so both are tried rather than assuming.
+          # Both archives are built from inside `dist`, so each stores paths
+          # relative to the version directory rather than embedding `dist/`.
           (
             cd dist
+            case "${{ matrix.archive }}" in
+              zip)
+                # PowerShell rather than a `zip` binary: Git Bash on the Windows
+                # runner has no `zip`, and Compress-Archive ships with the OS.
+                powershell -NoLogo -NonInteractive -Command \
+                  "Compress-Archive -Path '${name}' -DestinationPath '${archive}' -Force"
+                ;;
+              tar.gz)
+                tar -czf "${archive}" "${name}"
+                ;;
+            esac
+            # For verifying a download; not a signature, and not a substitute for
+            # one. It says the file arrived intact, not that this project
+            # produced it. Written from inside `dist` so the recorded name has no
+            # directory prefix and `-c` works wherever the file is unpacked.
+            # macOS has `shasum` and not `sha256sum`; Git Bash on the Windows
+            # runner has `sha256sum`, so both are tried rather than assuming.
             if command -v sha256sum > /dev/null; then
-              sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+              sha256sum "${archive}" > "${archive}.sha256"
             else
-              shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256"
+              shasum -a 256 "${archive}" > "${archive}.sha256"
             fi
           )
-          echo "archive=dist/${name}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "archive=dist/${archive}" >> "$GITHUB_OUTPUT"
           echo "name=${name}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.package.outputs.name }}
           path: |
@@ -128,7 +147,7 @@ jobs:
       # alone rather than at the top of the file.
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
@@ -137,6 +156,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # An empty glob would expand to a literal pattern and attach nothing,
+          # so the file list is checked before the release is created rather than
+          # discovered as a release with no binaries on it. Four files: an
+          # archive and a checksum for each of the two platforms.
+          shopt -s nullglob
+          assets=(dist/*.tar.gz dist/*.zip dist/*.sha256)
+          printf '%s\n' "${assets[@]}"
+          if [ "${#assets[@]}" -ne 4 ]; then
+            echo "expected 4 assets, found ${#assets[@]}" >&2
+            exit 1
+          fi
+
           # Drafted rather than published: the binaries are built on runners with
           # no Secure Enclave and no TPM, so no run of this workflow has ever
           # exercised a signing path. Someone should install one and run
@@ -146,4 +177,4 @@ jobs:
             --title "${GITHUB_REF_NAME}" \
             --draft \
             --generate-notes \
-            dist/*.tar.gz dist/*.sha256
+            "${assets[@]}"
