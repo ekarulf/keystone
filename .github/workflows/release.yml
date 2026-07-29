@@ -105,10 +105,13 @@ jobs:
             cd dist
             case "${{ matrix.archive }}" in
               zip)
-                # PowerShell rather than a `zip` binary: Git Bash on the Windows
-                # runner has no `zip`, and Compress-Archive ships with the OS.
-                powershell -NoLogo -NonInteractive -Command \
-                  "Compress-Archive -Path '${name}' -DestinationPath '${archive}' -Force"
+                # 7z, not `Compress-Archive`: the latter wrote entry names with
+                # backslash separators, which the ZIP spec reserves forward
+                # slashes for. Explorer tolerates it, but `unzip` warns and
+                # Python's zipfile creates files with backslashes *in the name*
+                # instead of a directory. Git Bash here has no `zip` binary, so
+                # 7z is the one available tool that gets this right.
+                7z a -tzip "${archive}" "${name}" > /dev/null
                 ;;
               tar.gz)
                 tar -czf "${archive}" "${name}"
@@ -124,6 +127,18 @@ jobs:
               sha256sum "${archive}" > "${archive}.sha256"
             else
               shasum -a 256 "${archive}" > "${archive}.sha256"
+            fi
+
+            # A zip whose entries use backslashes extracts to garbage everywhere
+            # except Explorer, and the first version of this step produced one.
+            # Checked rather than trusted, because the failure is invisible on
+            # the platform that builds the archive.
+            if [ "${{ matrix.archive }}" = zip ]; then
+              if unzip -l "${archive}" | grep -q '\\'; then
+                echo "the zip uses backslash separators" >&2
+                exit 1
+              fi
+              unzip -l "${archive}" | grep -q "${name}/${{ matrix.binary }}"
             fi
           )
           echo "archive=dist/${archive}" >> "$GITHUB_OUTPUT"
