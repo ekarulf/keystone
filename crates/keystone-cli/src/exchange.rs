@@ -15,12 +15,12 @@
 
 use std::path::Path;
 
+use crate::backend::CertificateIdentity;
 use keystone_core::config::Profile;
 use keystone_core::credentials::{AwsSessionCredentials, CachedCredentials};
 use keystone_core::error::{KeystoneError, Result};
 use keystone_core::store::{write_atomic, Store};
 use keystone_core::time::FixedClock;
-use keystone_macos::CertificateIdentity;
 use keystone_roles_anywhere::client::{AttemptRecord, TransportConfig};
 use keystone_roles_anywhere::{CreateSessionRequest, RolesAnywhereClient, SignedRequest};
 use time::OffsetDateTime;

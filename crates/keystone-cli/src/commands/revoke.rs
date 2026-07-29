@@ -51,7 +51,7 @@ pub fn run(context: &Context, args: &ProfileArgs) -> Result<()> {
         args.profile
     ))?;
 
-    // The Secure Enclave key is not deleted here. Deleting it would make the
+    // The hardware key is not deleted here. Deleting it would make the
     // profile unusable before the operator has confirmed the AWS-side change took
     // effect, and it cannot be undone.
     context.note("");

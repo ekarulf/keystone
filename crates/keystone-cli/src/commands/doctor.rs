@@ -1,6 +1,6 @@
 //! `keystone doctor` — run every check and report what is wrong.
 //!
-//! The design's list, in order: Secure Enclave availability, key restoration,
+//! The design's list, in order: key-store availability, key restoration,
 //! unattended signing, configuration permissions, certificate parsing,
 //! certificate validity, certificate/key match, CA chain validation, URI SAN
 //! presence, endpoint reachability, local clock, Roles Anywhere authentication,
@@ -111,14 +111,16 @@ pub fn run(context: &Context, args: &ProfileArgs) -> Result<()> {
         }
     };
 
-    let enclave = keystone_macos::enclave::report();
+    // Named for whichever key store this build uses, so a Windows user sees "TPM"
+    // rather than a macOS term they cannot act on.
+    let key_store = crate::backend::report();
     report.add(
-        "Secure Enclave",
-        if enclave.available {
+        crate::backend::KEY_STORE,
+        if key_store.available {
             Outcome::Pass("available".to_string())
         } else {
             Outcome::Fail(
-                enclave
+                key_store
                     .detail
                     .clone()
                     .unwrap_or_else(|| "unavailable".to_string()),
@@ -242,8 +244,8 @@ fn check_identity(
 
     if let Some(key) = &key {
         // "Unattended" is the property that matters: this signs without a prompt,
-        // so if a Touch ID dialog appeared it would appear here rather than during
-        // an automated credential refresh.
+        // so a Touch ID or Windows Hello dialog would appear here rather than
+        // during an automated credential refresh.
         report.check(
             "unattended signing",
             "signed a probe with no user interaction",
@@ -381,7 +383,7 @@ fn check_identity(
         Ok(loaded) => {
             report.check(
                 "certificate/key match",
-                "the Secure Enclave key signs verifiably under this certificate",
+                "the hardware key signs verifiably under this certificate",
                 loaded
                     .identity
                     .verify_signing_path(b"keystone doctor signing probe"),

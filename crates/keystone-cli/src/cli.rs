@@ -1,19 +1,19 @@
 //! The command-line surface.
 //!
 //! Kept separate from the command implementations so the whole grammar can be
-//! read in one place, and so parsing can be tested without touching the Secure
-//! Enclave, the filesystem, or the network.
+//! read in one place, and so parsing can be tested without touching the hardware
+//! key store, the filesystem, or the network.
 
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-/// Secure Enclave-backed temporary AWS credentials for macOS.
+/// Hardware-backed temporary AWS credentials.
 #[derive(Debug, Parser)]
 #[command(
     name = "keystone",
     version,
-    about = "Secure Enclave-backed temporary AWS credentials",
+    about = "Hardware-backed temporary AWS credentials",
     long_about = None,
     propagate_version = true
 )]
@@ -39,7 +39,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Create a Secure Enclave identity without issuing a certificate.
+    /// Create a hardware-backed identity without issuing a certificate.
     Init(InitArgs),
     /// Create an identity, issue a certificate from a one-shot CA, and destroy the CA key.
     Bootstrap(BootstrapArgs),
@@ -87,7 +87,7 @@ pub struct InitArgs {
 
     /// Replace an existing profile's identity.
     ///
-    /// The previous Secure Enclave key becomes unusable, so any certificate
+    /// The previous hardware key becomes unusable, so any certificate
     /// issued for it stops working.
     #[arg(long)]
     pub force: bool,
@@ -139,9 +139,9 @@ pub struct BootstrapArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum EnrollCommand {
-    /// Write a PKCS#10 CSR for the Secure Enclave key.
+    /// Write a PKCS#10 CSR for the hardware key.
     Csr(EnrollCsrArgs),
-    /// Install a certificate issued for the Secure Enclave key.
+    /// Install a certificate issued for the hardware key.
     Install(EnrollInstallArgs),
 }
 

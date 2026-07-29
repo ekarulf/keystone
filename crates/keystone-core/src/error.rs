@@ -12,16 +12,21 @@ use time::OffsetDateTime;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum KeystoneError {
-    #[error("Secure Enclave is not available")]
+    // These four are named for the Secure Enclave because it was the first
+    // backend, and the names appear in the design's error model. Their messages
+    // are platform-neutral: the Windows TPM backend returns the same variants,
+    // and a Windows user reading "Secure Enclave is not available" would go
+    // looking for the wrong thing. The variant a caller matches on is unchanged.
+    #[error("no hardware-backed key store is available")]
     SecureEnclaveUnavailable,
 
-    #[error("Secure Enclave key could not be restored")]
+    #[error("the hardware-backed key could not be restored")]
     KeyUnavailable,
 
-    #[error("Secure Enclave operation failed: {0}")]
+    #[error("hardware-backed key operation failed: {0}")]
     SecureEnclave(String),
 
-    #[error("certificate does not match the Secure Enclave public key")]
+    #[error("certificate does not match the hardware-backed public key")]
     CertificateKeyMismatch,
 
     #[error("certificate expired at {0}")]

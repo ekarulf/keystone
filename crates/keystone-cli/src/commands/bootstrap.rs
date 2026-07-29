@@ -2,13 +2,13 @@
 //!
 //! The design's sequence, in order:
 //!
-//! 1. Generate the Secure Enclave P-256 signing key.
+//! 1. Generate the hardware P-256 signing key.
 //! 2. Generate a temporary software P-256 CA key.
 //! 3. Create a self-signed CA certificate.
 //! 4. Construct the Keystone device certificate.
 //! 5. Sign the device certificate with the CA.
 //! 6. Verify the leaf certificate and chain.
-//! 7. Verify the leaf public key matches the Secure Enclave key.
+//! 7. Verify the leaf public key matches the hardware key.
 //! 8. Persist only public certificate material.
 //! 9. Generate the CDK project.
 //! 10. Zeroize the CA private scalar.
@@ -21,6 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::backend::{DeviceKey, KeyPolicy};
 use keystone_core::config::{
     validate_profile_name, validate_region, validate_role_session_name, IssuerMetadata, Profile,
 };
@@ -28,7 +29,6 @@ use keystone_core::error::{KeystoneError, Result};
 use keystone_core::identity::KeyId;
 use keystone_core::signer::KeystoneSigningIdentity as _;
 use keystone_core::store::write_atomic;
-use keystone_macos::{AccessPolicy, SecureEnclaveIdentity};
 use keystone_pki::{DeviceCertificateSpec, EphemeralCaSpec};
 use time::OffsetDateTime;
 
@@ -67,12 +67,13 @@ pub fn run(context: &Context, args: &BootstrapArgs) -> Result<()> {
 
     // Step 1.
     let key_id = KeyId::generate();
-    let policy = AccessPolicy::default();
+    let policy = KeyPolicy::default();
     context.detail(format!(
-        "generating a Secure Enclave P-256 signing key ({})",
+        "generating a {} P-256 signing key ({})",
+        crate::backend::KEY_STORE,
         policy.describe()
     ));
-    let generated = SecureEnclaveIdentity::generate(key_id.clone(), policy, now)?;
+    let generated = DeviceKey::generate(key_id.clone(), policy, now)?;
     let public_key = generated.identity.public_key_sec1()?;
 
     // Steps 2 to 7, and 10.

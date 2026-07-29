@@ -22,7 +22,10 @@ pub fn run(context: &Context, args: &TestArgs) -> Result<()> {
     loaded
         .identity
         .verify_signing_path(b"keystone test signing probe")?;
-    context.detail("the Secure Enclave signed a probe that verifies against the certificate");
+    context.detail(format!(
+        "the {} signed a probe that verifies against the certificate",
+        crate::backend::KEY_STORE
+    ));
     context.detail(format!(
         "presenting {} (serial {}) issued by {}",
         loaded.certificate.subject,

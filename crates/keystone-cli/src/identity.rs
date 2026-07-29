@@ -1,16 +1,19 @@
 //! Restoring the device identity a profile names.
 //!
 //! Every command that signs anything goes through [`load_identity`], so the
-//! checks happen in exactly one place: the Secure Enclave must be present, the
-//! key must restore, the stored certificate must belong to that key, and the
+//! checks happen in exactly one place: the hardware key store must be present,
+//! the key must restore, the stored certificate must belong to that key, and the
 //! certificate must still be valid. If any of those fails, Keystone fails —
 //! there is no software fallback.
+//!
+//! Which key store that is — the Secure Enclave or the TPM — is [`crate::backend`]'s
+//! decision, not this module's.
 
+use crate::backend::{CertificateIdentity, DeviceKey, KeyPolicy};
 use keystone_core::config::Profile;
 use keystone_core::error::{KeystoneError, Result};
 use keystone_core::identity::Sha256Fingerprint;
 use keystone_core::store::Store;
-use keystone_macos::{AccessPolicy, CertificateIdentity, SecureEnclaveIdentity};
 use keystone_pki::ParsedCertificate;
 use time::OffsetDateTime;
 
@@ -21,25 +24,22 @@ pub struct LoadedIdentity {
     pub ca_certificate: ParsedCertificate,
 }
 
-/// Restore the Secure Enclave key a profile names, without its certificate.
+/// Restore the hardware key a profile names, without its certificate.
 ///
 /// `keystone enroll csr` needs this: at that point there is no certificate yet.
-pub fn load_key(
-    store: &Store,
-    profile_name: &str,
-    profile: &Profile,
-) -> Result<SecureEnclaveIdentity> {
+pub fn load_key(store: &Store, profile_name: &str, profile: &Profile) -> Result<DeviceKey> {
     let key_id = profile
         .key_id
         .clone()
         .ok_or_else(|| KeystoneError::ProfileIncomplete {
             profile: profile_name.to_string(),
-            reason:
-                "no Secure Enclave identity. Run `keystone init` or `keystone bootstrap` first."
-                    .to_string(),
+            reason: format!(
+                "no {} identity. Run `keystone init` or `keystone bootstrap` first.",
+                crate::backend::KEY_STORE
+            ),
         })?;
     let metadata = store.load_identity(&key_id)?;
-    SecureEnclaveIdentity::restore(&metadata, AccessPolicy::new(profile.key_accessibility))
+    DeviceKey::restore(&metadata, KeyPolicy::new(profile.key_accessibility))
 }
 
 /// Restore the key and pair it with the stored certificate.

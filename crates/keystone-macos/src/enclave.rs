@@ -448,8 +448,6 @@ mod backend {
 mod tests {
     use super::*;
 
-    const NOW: OffsetDateTime = time::macros::datetime!(2026-07-26 01:15:00 UTC);
-
     #[test]
     fn the_probe_message_is_not_an_aws_string_to_sign() {
         // A signature over the probe must not be replayable as a CreateSession
@@ -467,6 +465,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     mod hardware {
         use super::*;
+
+        const NOW: OffsetDateTime = time::macros::datetime!(2026-07-26 01:15:00 UTC);
 
         /// SHA-256 of `message`.
         fn sha256(message: &[u8]) -> Vec<u8> {

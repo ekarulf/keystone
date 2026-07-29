@@ -129,21 +129,44 @@ fn abbreviate(value: &str) -> String {
 
 /// What kind of key backs an identity.
 ///
-/// Only one variant exists today, but it is recorded explicitly so a future
-/// Keystone can refuse an identity it does not understand rather than
-/// misinterpreting its opaque reference.
+/// Recorded explicitly so Keystone can refuse an identity it does not understand
+/// rather than misinterpreting its opaque reference. The two variants are not
+/// interchangeable: the reference means different things, and a backend that read
+/// the other's would either fail obscurely or, worse, resolve to some unrelated
+/// key. Each backend checks this field before touching the reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KeyType {
     #[serde(rename = "secure-enclave-p256-signing")]
     SecureEnclaveP256Signing,
+    /// A TPM key held by the Windows Platform Crypto Provider.
+    ///
+    /// Its `opaque_key_reference` is the CNG key *name* in UTF-8, not a wrapped
+    /// key blob: CNG persists the key itself and hands back nothing to store.
+    #[serde(rename = "windows-tpm-p256-signing")]
+    WindowsTpmP256Signing,
+}
+
+impl KeyType {
+    /// The platform this key can be used on, for an error that explains itself.
+    ///
+    /// An identity directory copied between a Mac and a PC is the case worth
+    /// naming: the file is valid and the key is simply not reachable here, which
+    /// is different from corruption.
+    pub fn platform(self) -> &'static str {
+        match self {
+            Self::SecureEnclaveP256Signing => "macOS",
+            Self::WindowsTpmP256Signing => "Windows",
+        }
+    }
 }
 
 /// The persisted public record of a Keystone identity.
 ///
-/// `opaque_key_reference` is CryptoKit's Secure Enclave key blob. It is not an
-/// exported private scalar — the private key cannot be reconstructed from it on
-/// another device — but it is the only handle to the key, so losing or
-/// replacing this file makes the identity unusable.
+/// `opaque_key_reference` is whatever the backend needs to find its key again,
+/// and its meaning depends on `key_type`. Neither form is an exported private
+/// scalar — the private key cannot be reconstructed from either on another device
+/// — but it is the only handle to the key, so losing or replacing this file makes
+/// the identity unusable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdentityMetadata {
     pub version: u8,
@@ -152,7 +175,11 @@ pub struct IdentityMetadata {
     /// The 65-byte uncompressed SEC1 public key, base64-encoded.
     pub public_key_sec1: String,
     pub public_key_fingerprint_sha256: Sha256Fingerprint,
-    /// CryptoKit's Secure Enclave key reference, base64-encoded.
+    /// The backend's handle to the private key, base64-encoded.
+    ///
+    /// CryptoKit's wrapped Secure Enclave blob for a Secure Enclave key; the CNG
+    /// key name for a Windows TPM key. Base64 either way so the field's encoding
+    /// does not depend on the variant.
     pub opaque_key_reference: String,
     #[serde(with = "rfc3339")]
     pub created_at: OffsetDateTime,
@@ -162,8 +189,30 @@ pub struct IdentityMetadata {
 pub const IDENTITY_VERSION: u8 = 1;
 
 impl IdentityMetadata {
+    /// Metadata for a Secure Enclave key.
     pub fn new(
         key_id: KeyId,
+        public_key_sec1: &[u8; 65],
+        opaque_key_reference: &[u8],
+        created_at: OffsetDateTime,
+    ) -> Self {
+        Self::with_key_type(
+            key_id,
+            KeyType::SecureEnclaveP256Signing,
+            public_key_sec1,
+            opaque_key_reference,
+            created_at,
+        )
+    }
+
+    /// Metadata for a key of an explicitly named backend.
+    ///
+    /// [`new`](Self::new) remains the Secure Enclave constructor so that the
+    /// macOS call sites cannot acquire a Windows key type by editing one
+    /// argument.
+    pub fn with_key_type(
+        key_id: KeyId,
+        key_type: KeyType,
         public_key_sec1: &[u8; 65],
         opaque_key_reference: &[u8],
         created_at: OffsetDateTime,
@@ -171,7 +220,7 @@ impl IdentityMetadata {
         Self {
             version: IDENTITY_VERSION,
             key_id,
-            key_type: KeyType::SecureEnclaveP256Signing,
+            key_type,
             public_key_sec1: BASE64_STANDARD.encode(public_key_sec1),
             public_key_fingerprint_sha256: Sha256Fingerprint::of(public_key_sec1),
             opaque_key_reference: BASE64_STANDARD.encode(opaque_key_reference),

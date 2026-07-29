@@ -24,3 +24,9 @@ workspace = true
 
 [target."cfg(unix)".dependencies]
 rustix.workspace = true
+
+# The owner/DACL equivalents of the uid-and-mode check. `keystone-core` stays at
+# `unsafe_code = "forbid"`; every unsafe call behind these functions is in the
+# quarantine crate.
+[target."cfg(windows)".dependencies]
+keystone-win32-sys.workspace = true

@@ -1,6 +1,7 @@
 # Keystone
 
-Secure Enclave-backed temporary AWS credentials for macOS.
+Hardware-backed temporary AWS credentials: the Secure Enclave on macOS, the TPM
+on Windows.
 
 ## Status
 
@@ -13,12 +14,14 @@ as a record of the intended order.
 
 ## Summary
 
-Keystone is a standalone macOS credential helper that exchanges a hardware-backed device identity for temporary AWS credentials through AWS IAM Roles Anywhere.
+Keystone is a standalone credential helper that exchanges a hardware-backed device identity for temporary AWS credentials through AWS IAM Roles Anywhere.
 
-The long-lived private key is generated inside the Mac’s Secure Enclave and is never exported. Keystone uses that key to sign an IAM Roles Anywhere `CreateSession` request. IAM Roles Anywhere validates the signature and X.509 certificate, then returns ordinary temporary AWS credentials.
+The long-lived private key is generated inside the Mac’s Secure Enclave, or the PC’s TPM, and is never exported. Keystone uses that key to sign an IAM Roles Anywhere `CreateSession` request. IAM Roles Anywhere validates the signature and X.509 certificate, then returns ordinary temporary AWS credentials.
+
+The two key stores are interchangeable from every other component’s point of view: each generates a non-exportable P-256 signing key, signs without a user-presence prompt, and has no software fallback. [Platform Support](#platform-support) describes where they differ.
 
 ```text
-macOS Secure Enclave
+Secure Enclave (macOS) or TPM (Windows)
 P-256 signing key
         │
         ▼
@@ -77,7 +80,7 @@ The initial version does not need to provide:
 * AWS console login;
 * SSH authentication;
 * general human SSO;
-* Windows or Linux support;
+* Linux support;
 * RSA identities;
 * graphical configuration;
 * automatic CDK deployment;
@@ -141,7 +144,7 @@ The Secure Enclave prevents private-key export. It is not an application-level a
 
 # Platform Support
 
-Version 0 supports:
+Keystone supports two hardware key stores:
 
 ```text
 Operating system: macOS
@@ -152,11 +155,54 @@ Signature algorithm: ECDSA with SHA-256
 AWS signing algorithm: AWS4-X509-ECDSA-SHA256
 ```
 
+```text
+Operating system: Windows 10 or later
+Primary architecture: x86-64
+Private-key backend: TPM 2.0, via the Microsoft Platform Crypto Provider
+Public-key algorithm: P-256
+Signature algorithm: ECDSA with SHA-256
+AWS signing algorithm: AWS4-X509-ECDSA-SHA256
+```
+
 Intel Macs with a T2 chip may be supported later after integration testing.
+
+Everything above the key store is shared: the same identity records, the same
+ephemeral CA, the same `CreateSession` client, and the same credential-process
+contract. One backend is selected at compile time by target, and a target with
+neither key store gets a backend whose every operation fails closed.
+
+Three properties are the same on both platforms, and they are what make them
+interchangeable:
+
+* the private key cannot be exported. On Windows the key is created with
+  `NCRYPT_EXPORT_POLICY_PROPERTY` set to zero before `NCryptFinalizeKey`, after
+  which the policy is immutable;
+* no operation requires user presence. Every CNG call passes
+  `NCRYPT_SILENT_FLAG`, so a key that would prompt fails the call instead. Windows
+  Hello is deliberately not used: it would put a gesture in front of every
+  credential refresh;
+* there is no software fallback. Only the TPM-backed platform provider is opened.
+
+Two differences are worth stating because they change the code rather than the
+guarantees:
+
+* CNG signs a *digest*, where CryptoKit signs a message and hashes internally. The
+  Windows backend therefore hashes once, explicitly, and implements the prehashed
+  signer;
+* CNG persists a key under a *name* and returns nothing storable, where CryptoKit
+  returns a wrapped blob. So a Windows identity's opaque key reference is a name,
+  and restoring one compares the public key CNG reports against the recorded one —
+  a name is not evidence, since anything that can create a TPM key could have
+  created a different key under the same name.
+
+`key_accessibility` has no Windows equivalent: a TPM key is usable whenever the
+user's profile is loaded. Keystone records the configured value and reports plainly
+that Windows does not enforce it, rather than implying a guarantee the platform does
+not make.
 
 Keystone should fail clearly when:
 
-* no Secure Enclave is available;
+* no hardware key store is available;
 * an opaque key reference cannot be restored;
 * the key requires biometric interaction;
 * the certificate does not match the key;
@@ -164,6 +210,44 @@ Keystone should fail clearly when:
 * the certificate is not yet valid;
 * the certificate chain is malformed;
 * IAM Roles Anywhere rejects the identity.
+
+## File permissions
+
+The rule is the same on both platforms — refuse to read a file another local user
+could have written, and never create one they could read — but it is expressed
+differently, because Windows has no mode bits.
+
+On Unix, Keystone checks the owning uid and rejects group- or world-writable files
+and symlinks. On Windows it reads the file's owner SID and walks its DACL, and
+rejects a file when another principal holds write-equivalent access, when the owner
+is neither the caller nor the Administrators group, or when the DACL is absent — a
+NULL DACL grants everyone full control, which is the most permissive state a file
+can be in rather than the most restrictive.
+
+Write-equivalent access includes `WRITE_DAC` and `WRITE_OWNER`, not only the write
+bits: a principal who can rewrite the ACL can grant itself write access, so
+ignoring those would make the check decorative.
+
+Private files are created with an owner-only DACL supplied to `CreateFileW` rather
+than applied afterwards, for the same reason Unix passes a mode to `open`: between
+creating a file and fixing its ACL, its contents are readable by whoever the
+containing directory allows. Inheritance is blocked with
+`PROTECTED_DACL_SECURITY_INFORMATION`, so a loosened parent directory cannot widen
+access to a file Keystone reports as private.
+
+Windows data lives under `%LOCALAPPDATA%\Keystone`, not `%APPDATA%`. The roaming
+profile syncs to a file server, and an identity bound to one machine's TPM must not
+be copied to machines where the key it names does not exist.
+
+## Unsafe code
+
+The workspace sets `unsafe_code = "forbid"`. CNG and the Win32 security APIs are raw
+FFI with no safe wrapper, so every `unsafe` block Keystone executes lives in one
+crate, `keystone-win32-sys`, which sets the lint to `deny` and marks each block with
+an explicit allow and a safety comment. Auditing Keystone's use of unsafe means
+reading one directory. The bindings themselves come from Microsoft's `windows-sys`
+rather than hand-written `extern` blocks, because a mistyped FFI signature is
+undefined behavior that a macOS build cannot catch.
 
 ---
 
@@ -177,6 +261,8 @@ keystone/
 ├── crates/
 │   ├── keystone-core/
 │   ├── keystone-macos/
+│   ├── keystone-windows/
+│   ├── keystone-win32-sys/
 │   ├── keystone-pki/
 │   ├── keystone-roles-anywhere/
 │   ├── keystone-infra/
@@ -213,6 +299,28 @@ macOS-specific behavior:
 * ECDSA signing;
 * Keychain interaction;
 * access-control configuration.
+
+## `keystone-windows`
+
+The same behavior against the TPM:
+
+* TPM availability;
+* P-256 key generation, non-exportable and signing-only;
+* key restoration, including the public-key comparison that makes a stored key
+  name safe to trust;
+* ECDSA signing over a caller-supplied digest;
+* key policy, and reporting what Windows does and does not enforce.
+
+## `keystone-win32-sys`
+
+The FFI quarantine, and the only crate in the workspace permitted to use `unsafe`:
+
+* CNG key creation, opening, export, signing, and deletion;
+* file owner and DACL inspection;
+* owner-only file creation and DACL application.
+
+It contains no policy. Failures are returned as the raw status the API reported, and
+`keystone-windows` decides what each one means.
 
 ## `keystone-pki`
 

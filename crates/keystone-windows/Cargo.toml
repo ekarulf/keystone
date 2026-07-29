@@ -1,0 +1,31 @@
+[package]
+name = "keystone-windows"
+description = "TPM key generation, restoration, and signing for Keystone on Windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+keystone-core.workspace = true
+keystone-pki.workspace = true
+keystone-roles-anywhere.workspace = true
+
+base64.workspace = true
+sha2.workspace = true
+time.workspace = true
+
+# The FFI quarantine. Only reachable on Windows; on any other target this crate
+# compiles to fail-closed stubs and does not depend on it at all.
+[target.'cfg(windows)'.dependencies]
+keystone-win32-sys.workspace = true
+
+[dev-dependencies]
+keystone-pki = { workspace = true, features = ["testing"] }
+keystone-roles-anywhere = { workspace = true, features = ["testing"] }
+hex.workspace = true
+p256.workspace = true
+
+[lints]
+workspace = true

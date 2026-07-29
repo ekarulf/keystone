@@ -86,9 +86,11 @@ impl Context {
             .clone()
             .ok_or_else(|| KeystoneError::ProfileIncomplete {
                 profile: name.to_string(),
-                reason: "no Secure Enclave identity yet. Run `keystone bootstrap --profile \
-                         <name>` (or `keystone init` to enroll with your own CA)."
-                    .to_string(),
+                reason: format!(
+                    "no {} identity yet. Run `keystone bootstrap --profile <name>` (or \
+                     `keystone init` to enroll with your own CA).",
+                    crate::backend::KEY_STORE
+                ),
             })
     }
 

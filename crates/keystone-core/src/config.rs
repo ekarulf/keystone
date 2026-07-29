@@ -397,7 +397,7 @@ pub struct Paths {
 }
 
 impl Paths {
-    /// The standard macOS locations, honoring `KEYSTONE_HOME` when set.
+    /// The platform's standard locations, honoring `KEYSTONE_HOME` when set.
     pub fn discover() -> Result<Self> {
         if let Some(root) = std::env::var_os("KEYSTONE_HOME") {
             let root = PathBuf::from(root);
@@ -406,6 +406,12 @@ impl Paths {
                 data_dir: root,
             });
         }
+        Self::platform_default()
+    }
+
+    /// The standard macOS locations.
+    #[cfg(not(windows))]
+    fn platform_default() -> Result<Self> {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .filter(|p| !p.as_os_str().is_empty())
@@ -413,6 +419,33 @@ impl Paths {
         Ok(Self {
             data_dir: home.join("Library/Application Support/Keystone"),
             cache_dir: home.join("Library/Caches/Keystone"),
+        })
+    }
+
+    /// The standard Windows locations.
+    ///
+    /// `%LOCALAPPDATA%`, not `%APPDATA%`. The roaming profile syncs to a file
+    /// server, and a Keystone identity is bound to one machine's TPM: roaming it
+    /// would copy an identity file to every machine the user signs in to, where the
+    /// key it names does not exist. The cache goes under the same root in a
+    /// separate subdirectory, since Windows has no distinct per-user cache
+    /// location.
+    #[cfg(windows)]
+    fn platform_default() -> Result<Self> {
+        let local = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty())
+            .ok_or_else(|| {
+                KeystoneError::InvalidConfiguration(
+                    "LOCALAPPDATA is not set, so Keystone cannot find its data directory; set \
+                     KEYSTONE_HOME to choose one explicitly"
+                        .to_string(),
+                )
+            })?;
+        let root = local.join("Keystone");
+        Ok(Self {
+            cache_dir: root.join("cache"),
+            data_dir: root,
         })
     }
 
@@ -528,7 +561,81 @@ pub fn check_not_group_or_world_writable(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+/// Reject a file another user could modify — the Windows form of the same check.
+///
+/// Windows has no mode bits, so the three Unix conditions become three questions
+/// asked of the file's security descriptor:
+///
+/// * does anyone other than the caller hold write-equivalent access, which stands
+///   in for group- and world-writable. "Write-equivalent" includes `WRITE_DAC`,
+///   because a principal who can rewrite the ACL can grant itself write;
+/// * is the caller the owner, since an owner can rewrite the DACL at will — the
+///   direct analogue of the uid check;
+/// * is the DACL absent, which grants *everyone* full control. It has no Unix
+///   equivalent and is the most permissive state a file can be in, so it is
+///   rejected outright.
+///
+/// The symlink case has no counterpart here. A Windows symbolic link requires
+/// either administrator rights or Developer Mode to create, and a caller who
+/// already has administrator rights can rewrite the file directly, so refusing
+/// links would not close a path an attacker could otherwise use.
+///
+/// The Administrators group is accepted for the same reason root is accepted on
+/// Unix: it can read and rewrite anything regardless, and refusing it would break a
+/// Keystone installed for all users.
+#[cfg(windows)]
+pub fn check_not_group_or_world_writable(path: &Path) -> Result<()> {
+    use keystone_win32_sys::security;
+
+    let user = security::current_user_sid().map_err(|error| {
+        KeystoneError::Other(format!("cannot determine the current user's SID: {error}"))
+    })?;
+    let access = security::file_access(path, &user).map_err(|error| {
+        KeystoneError::Other(format!(
+            "cannot inspect the permissions of {}: {error}",
+            path.display()
+        ))
+    })?;
+
+    if access.dacl_absent {
+        return Err(KeystoneError::InvalidConfiguration(format!(
+            "{} has no access-control list, which grants every user full control. Reset its \
+             permissions (for example with `icacls \"{}\" /reset /q` after removing inherited \
+             entries) or pass --allow-unsafe-permissions",
+            path.display(),
+            path.display()
+        )));
+    }
+
+    if access.other_writers > 0 {
+        let others = access.other_writers;
+        return Err(KeystoneError::InvalidConfiguration(format!(
+            "{} is writable by {others} other principal(s); run \
+             `icacls \"{}\" /inheritance:r /grant:r \"%USERNAME%:F\"` or pass \
+             --allow-unsafe-permissions",
+            path.display(),
+            path.display()
+        )));
+    }
+
+    if !access.owner.matches(&user) && !security::is_administrators(&access.owner) {
+        return Err(KeystoneError::InvalidConfiguration(format!(
+            "{} is owned by another account; its owner can change its permissions at any time, so \
+             run `icacls \"{}\" /setowner \"%USERNAME%\"` or pass --allow-unsafe-permissions",
+            path.display(),
+            path.display()
+        )));
+    }
+
+    Ok(())
+}
+
+/// No permission model to check against, so nothing is claimed.
+///
+/// Reached only on a target that is neither Unix nor Windows, which Keystone does
+/// not support: `keystone doctor` reports no available key store there, so this is
+/// never the only thing standing between a caller and a hostile file.
+#[cfg(not(any(unix, windows)))]
 pub fn check_not_group_or_world_writable(_path: &Path) -> Result<()> {
     Ok(())
 }

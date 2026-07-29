@@ -343,13 +343,48 @@ fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
             .map_err(|e| KeystoneError::io(format!("cannot flush {}", path.display()), e))?;
         Ok(())
     }
-    #[cfg(not(unix))]
+    // Windows has no mode to pass to `open`, so the equivalent is a DACL supplied
+    // at creation. Same two properties as the Unix path: the file is private from
+    // the moment it exists, and an existing file is refused rather than adopted.
+    #[cfg(windows)]
+    {
+        use std::io::Write as _;
+
+        let user = keystone_win32_sys::security::current_user_sid().map_err(|error| {
+            KeystoneError::Other(format!("cannot determine the current user's SID: {error}"))
+        })?;
+        let handle =
+            keystone_win32_sys::security::create_owner_only_file(path, &user).map_err(|error| {
+                KeystoneError::Other(format!("cannot create {}: {error}", path.display()))
+            })?;
+        let Some(handle) = handle else {
+            return Err(KeystoneError::Other(format!(
+                "{} already exists. Another Keystone process may be running, or a previous run \
+                 was interrupted; remove it and retry.",
+                path.display()
+            )));
+        };
+        let mut file = handle.into_file();
+        file.write_all(contents)
+            .map_err(|e| KeystoneError::io(format!("cannot write {}", path.display()), e))?;
+        file.sync_all()
+            .map_err(|e| KeystoneError::io(format!("cannot flush {}", path.display()), e))?;
+        Ok(())
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         std::fs::write(path, contents)
             .map_err(|e| KeystoneError::io(format!("cannot write {}", path.display()), e))
     }
 }
 
+/// Restrict an existing path to its owner.
+///
+/// `mode` is the Unix mode; on Windows it is ignored, because the only distinction
+/// Keystone draws — owner-only versus not — is expressed by the DACL rather than by
+/// a number. Both of Keystone's modes ([`FILE_MODE`] and [`DIR_MODE`]) are
+/// owner-only, so nothing is lost in the translation. If a third, more permissive
+/// mode is ever added, this function must stop ignoring the argument.
 fn set_mode(path: &Path, mode: u32) -> Result<()> {
     #[cfg(unix)]
     {
@@ -358,7 +393,24 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
             KeystoneError::io(format!("cannot set permissions on {}", path.display()), e)
         })
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        debug_assert!(
+            mode == FILE_MODE || mode == DIR_MODE,
+            "set_mode on Windows ignores the mode and applies an owner-only DACL, which is only \
+             equivalent for Keystone's owner-only modes; {mode:04o} is neither"
+        );
+        let user = keystone_win32_sys::security::current_user_sid().map_err(|error| {
+            KeystoneError::Other(format!("cannot determine the current user's SID: {error}"))
+        })?;
+        keystone_win32_sys::security::apply_owner_only_dacl(path, &user).map_err(|error| {
+            KeystoneError::Other(format!(
+                "cannot restrict {} to your account: {error}",
+                path.display()
+            ))
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (path, mode);
         Ok(())

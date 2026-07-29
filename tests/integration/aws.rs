@@ -36,7 +36,9 @@
 //!
 //! Gated on `KEYSTONE_AWS_INTEGRATION_PROFILE` naming an enrolled profile, so
 //! the suite is silent rather than failing on a machine with no account wired
-//! up. These tests only read: they call `CreateSession`, deliberately malformed
+//! up, and compiled only for a target with a hardware key store, since it signs
+//! with the real device key. It is written against the `backend` aliases below so
+//! the Secure Enclave and the TPM face the same assertions. These tests only read: they call `CreateSession`, deliberately malformed
 //! or not, and `sts:GetCallerIdentity`. They create, modify, and delete nothing.
 //!
 //! ```text
@@ -65,9 +67,11 @@ use keystone_pki::ParsedCertificate;
 use keystone_roles_anywhere::response::looks_like_clock_skew;
 use keystone_roles_anywhere::testing::stub_server::{StubResponse, StubServer};
 use keystone_roles_anywhere::testing::TestIdentity;
-use keystone_roles_anywhere::{
-    CreateSessionRequest, RetryPolicy, RolesAnywhereClient, TransportConfig,
-};
+use keystone_roles_anywhere::{CreateSessionRequest, RolesAnywhereClient, TransportConfig};
+// Level 2 only: retries are disabled there, so a rejection from AWS is reported
+// verbatim rather than after three identical attempts.
+#[cfg(any(target_os = "macos", windows))]
+use keystone_roles_anywhere::RetryPolicy;
 use keystone_tests::{fixture, fixture_key_id, FIXTURE_SAN};
 use p256::ecdsa::SigningKey;
 use p256::pkcs8::DecodePrivateKey as _;
@@ -719,11 +723,31 @@ fn returned_credentials_are_shaped_for_the_credential_process_contract() {
 
 // -- Level 2: against a real account ----------------------------------------
 
+/// The hardware backend for this platform.
+///
+/// Level 2 signs with a real device key, so it and its helpers are compiled only
+/// for a target that has a key store. Written against these aliases rather than
+/// one platform's types, so the same assertions cover both backends.
+#[cfg(target_os = "macos")]
+mod backend {
+    pub use keystone_macos::AccessPolicy as KeyPolicy;
+    pub use keystone_macos::CertificateIdentity;
+    pub use keystone_macos::SecureEnclaveIdentity as DeviceKey;
+}
+
+#[cfg(windows)]
+mod backend {
+    pub use keystone_windows::CertificateIdentity;
+    pub use keystone_windows::TpmIdentity as DeviceKey;
+    pub use keystone_windows::TpmPolicy as KeyPolicy;
+}
+
 /// The profile to exchange with, or `None` when no account is configured.
 ///
 /// `KEYSTONE_AWS_INTEGRATION_PROFILE` names a profile in the store;
 /// `KEYSTONE_AWS_INTEGRATION_HOME` optionally overrides where the store lives,
 /// so a throwaway account can be tested without touching the real one.
+#[cfg(any(target_os = "macos", windows))]
 fn integration_target() -> Option<(String, keystone_core::store::Store)> {
     let profile = std::env::var("KEYSTONE_AWS_INTEGRATION_PROFILE").ok()?;
     let paths = match std::env::var_os("KEYSTONE_AWS_INTEGRATION_HOME") {
@@ -734,6 +758,7 @@ fn integration_target() -> Option<(String, keystone_core::store::Store)> {
 }
 
 /// Print why an account test did nothing, so an ignored run is not silent.
+#[cfg(any(target_os = "macos", windows))]
 fn no_account() -> bool {
     if integration_target().is_none() {
         println!(
@@ -748,20 +773,20 @@ fn no_account() -> bool {
 ///
 /// Deliberately reconstructed here from the store rather than shelling out to
 /// the CLI, so the test exercises the same signing path `credential-process`
-/// does — a Secure Enclave key paired with the stored certificate.
-#[cfg(target_os = "macos")]
+/// does — a hardware key paired with the stored certificate.
+#[cfg(any(target_os = "macos", windows))]
 fn real_identity(
     store: &keystone_core::store::Store,
     profile: &keystone_core::config::Profile,
     now: OffsetDateTime,
-) -> keystone_macos::CertificateIdentity {
+) -> backend::CertificateIdentity {
     let key_id = profile.key_id.clone().expect("the profile has an identity");
     let metadata = store.load_identity(&key_id).expect("the identity loads");
-    let key = keystone_macos::SecureEnclaveIdentity::restore(
+    let key = backend::DeviceKey::restore(
         &metadata,
-        keystone_macos::AccessPolicy::new(profile.key_accessibility),
+        backend::KeyPolicy::new(profile.key_accessibility),
     )
-    .expect("the Secure Enclave key restores");
+    .expect("the hardware key restores");
 
     let fingerprint = profile
         .certificate_fingerprint_sha256
@@ -771,17 +796,17 @@ fn real_identity(
         .load_certificates(&fingerprint)
         .expect("the certificates load");
     let leaf = ParsedCertificate::from_der(&leaf_der).expect("the leaf parses");
-    keystone_macos::CertificateIdentity::new(key, leaf, Vec::new(), now)
+    backend::CertificateIdentity::new(key, leaf, Vec::new(), now)
         .expect("the key and certificate belong together")
 }
 
 /// A client pointed at real AWS, with retries disabled so a rejection is
 /// reported verbatim rather than after three identical attempts.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn real_client(
-    identity: keystone_macos::CertificateIdentity,
+    identity: backend::CertificateIdentity,
     profile: &keystone_core::config::Profile,
-) -> RolesAnywhereClient<keystone_macos::CertificateIdentity, keystone_core::time::SystemClock> {
+) -> RolesAnywhereClient<backend::CertificateIdentity, keystone_core::time::SystemClock> {
     RolesAnywhereClient::new(
         identity,
         profile.region.clone(),
@@ -793,7 +818,7 @@ fn real_client(
 }
 
 /// Everything an account test needs, or `None` to skip.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn account_setup() -> Option<(
     keystone_core::config::Profile,
     keystone_core::store::Store,
@@ -813,7 +838,7 @@ fn account_setup() -> Option<(
 
 #[test]
 #[ignore = "needs a dedicated AWS account; set KEYSTONE_AWS_INTEGRATION_PROFILE"]
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn aws_a_valid_identity_succeeds() {
     if no_account() {
         return;
@@ -854,7 +879,7 @@ fn aws_a_valid_identity_succeeds() {
 
 #[test]
 #[ignore = "needs a dedicated AWS account; set KEYSTONE_AWS_INTEGRATION_PROFILE"]
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn aws_credentials_call_get_caller_identity() {
     if no_account() {
         return;
@@ -904,7 +929,7 @@ fn aws_credentials_call_get_caller_identity() {
 
 #[test]
 #[ignore = "needs a dedicated AWS account; set KEYSTONE_AWS_INTEGRATION_PROFILE"]
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn aws_a_wrong_trust_anchor_profile_or_role_fails() {
     if no_account() {
         return;
@@ -967,7 +992,7 @@ fn aws_a_wrong_trust_anchor_profile_or_role_fails() {
 
 #[test]
 #[ignore = "needs a dedicated AWS account; set KEYSTONE_AWS_INTEGRATION_PROFILE"]
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn aws_a_stale_timestamp_fails() {
     if no_account() {
         return;
@@ -1008,7 +1033,7 @@ fn aws_a_stale_timestamp_fails() {
 
 #[test]
 #[ignore = "needs a dedicated AWS account; set KEYSTONE_AWS_INTEGRATION_PROFILE"]
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn aws_a_modified_body_or_signed_header_fails() {
     if no_account() {
         return;
@@ -1069,7 +1094,7 @@ fn aws_a_modified_body_or_signed_header_fails() {
 }
 
 /// POST a signed request as-is, optionally replacing the body or one header.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn send_raw(
     http: &reqwest::blocking::Client,
     signed: &keystone_roles_anywhere::SignedRequest,
@@ -1103,7 +1128,7 @@ fn send_raw(
 }
 
 /// The `CreateSession` request a profile describes.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn session_request(profile: &keystone_core::config::Profile, name: &str) -> CreateSessionRequest {
     let ready = profile.require_ready(name).expect("a complete profile");
     CreateSessionRequest {
@@ -1116,7 +1141,7 @@ fn session_request(profile: &keystone_core::config::Profile, name: &str) -> Crea
 }
 
 /// Replace the resource id at the end of an ARN with one that does not exist.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn replace_resource_id(arn: &str) -> String {
     match arn.rsplit_once('/') {
         Some((prefix, _)) => format!("{prefix}/00000000-0000-0000-0000-000000000000"),

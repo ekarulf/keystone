@@ -2,7 +2,7 @@
 //!
 //! "No secret data should be printed." Everything below is either public
 //! certificate material, a fingerprint, an ARN, or local configuration. The
-//! opaque Secure Enclave key reference is deliberately not among them.
+//! opaque hardware key reference is deliberately not among them.
 //!
 //! This is also the one diagnostic command that must work on a half-configured
 //! profile, so each section degrades to a line saying what is missing rather than
@@ -21,7 +21,7 @@ pub fn run(context: &Context, args: &ProfileArgs) -> Result<()> {
 
     let mut out = Vec::new();
     out.push(format!("Profile: {}", args.profile));
-    out.push("Key backend: macOS Secure Enclave".to_string());
+    out.push(format!("Key backend: {}", crate::backend::KEY_STORE));
     out.push("Key algorithm: P-256 ECDSA".to_string());
 
     match &profile.key_id {

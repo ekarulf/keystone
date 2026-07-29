@@ -1,13 +1,13 @@
-//! `keystone init` — create a Secure Enclave identity and nothing else.
+//! `keystone init` — create a hardware-backed identity and nothing else.
 //!
 //! The command for enrolling with an existing CA: it produces the key whose
 //! public half `keystone enroll csr` then asks the CA to certify. It writes no
 //! certificate, so the profile it leaves behind is deliberately incomplete.
 
+use crate::backend::{DeviceKey, KeyPolicy};
 use keystone_core::config::{validate_profile_name, validate_region, Profile};
 use keystone_core::error::{KeystoneError, Result};
 use keystone_core::identity::KeyId;
-use keystone_macos::{AccessPolicy, SecureEnclaveIdentity};
 
 use crate::cli::InitArgs;
 use crate::context::Context;
@@ -37,13 +37,14 @@ pub fn run(context: &Context, args: &InitArgs) -> Result<()> {
 
     let now = context.now_checked()?;
     let key_id = KeyId::generate();
-    let policy = AccessPolicy::default();
+    let policy = KeyPolicy::default();
 
     context.detail(format!(
-        "generating a Secure Enclave P-256 signing key ({})",
+        "generating a {} P-256 signing key ({})",
+        crate::backend::KEY_STORE,
         policy.describe()
     ));
-    let generated = SecureEnclaveIdentity::generate(key_id.clone(), policy, now)?;
+    let generated = DeviceKey::generate(key_id.clone(), policy, now)?;
 
     // Metadata first: a key with no metadata is unreachable, whereas metadata
     // whose profile entry is missing is merely unused.
@@ -67,7 +68,10 @@ pub fn run(context: &Context, args: &InitArgs) -> Result<()> {
 
     context.save_config(&config)?;
 
-    context.note(format!("Created Secure Enclave identity {key_id}"));
+    context.note(format!(
+        "Created {} identity {key_id}",
+        crate::backend::KEY_STORE
+    ));
     context.note(format!(
         "Public-key fingerprint: {}",
         generated

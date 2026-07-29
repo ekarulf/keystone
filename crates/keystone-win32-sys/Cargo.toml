@@ -1,0 +1,19 @@
+[package]
+name = "keystone-win32-sys"
+description = "The Win32 FFI quarantine: every unsafe call Keystone makes on Windows lives here"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
+# Deliberately NOT `[lints] workspace = true`. The workspace forbids
+# `unsafe_code`; this crate is the one place that cannot honor it, because CNG
+# and the Win32 security APIs are raw FFI with no safe wrapper. Confining the
+# unsafe here keeps every other crate at `forbid` and makes the audit surface
+# one directory.
+[lints.rust]
+unsafe_code = "deny"

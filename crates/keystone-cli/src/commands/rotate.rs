@@ -4,7 +4,7 @@
 //! new key, a new one-shot CA, a new device certificate, and a second trust
 //! anchor. The design's safe sequence is:
 //!
-//! 1. Generate a new Secure Enclave key.
+//! 1. Generate a new hardware key.
 //! 2. Generate a new ephemeral CA.
 //! 3. Issue a new device certificate.
 //! 4. Deploy a second trust anchor.
@@ -24,12 +24,12 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::backend::{DeviceKey, KeyPolicy};
 use keystone_core::config::{IssuerMetadata, Profile};
 use keystone_core::error::{KeystoneError, Result};
 use keystone_core::identity::{KeyId, Sha256Fingerprint};
 use keystone_core::signer::KeystoneSigningIdentity as _;
 use keystone_core::store::write_atomic;
-use keystone_macos::{AccessPolicy, SecureEnclaveIdentity};
 use keystone_pki::{DeviceCertificateSpec, EphemeralCaSpec};
 use time::OffsetDateTime;
 
@@ -110,12 +110,13 @@ fn prepare(
     };
 
     let key_id = KeyId::generate();
-    let policy = AccessPolicy::new(profile.key_accessibility);
+    let policy = KeyPolicy::new(profile.key_accessibility);
     context.detail(format!(
-        "generating a new Secure Enclave key ({})",
+        "generating a new {} key ({})",
+        crate::backend::KEY_STORE,
         policy.describe()
     ));
-    let generated = SecureEnclaveIdentity::generate(key_id.clone(), policy, now)?;
+    let generated = DeviceKey::generate(key_id.clone(), policy, now)?;
     let public_key = generated.identity.public_key_sec1()?;
 
     let device = DeviceCertificateSpec::new(&device_name, key_id.clone(), now)

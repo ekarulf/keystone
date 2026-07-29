@@ -1,10 +1,11 @@
-//! `keystone` — Secure Enclave-backed temporary AWS credentials for macOS.
+//! `keystone` — hardware-backed temporary AWS credentials.
 //!
 //! This is a dispatch table and an exit-code policy, nothing more. Every command
 //! lives in [`commands`] and returns `Result<()>`; failures are reported on
 //! standard error and exit nonzero, which is what the AWS `credential_process`
 //! contract requires of a failed credential fetch.
 
+mod backend;
 mod cli;
 mod commands;
 mod context;

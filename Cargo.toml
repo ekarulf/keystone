@@ -12,6 +12,8 @@ repository = "https://github.com/ekarulf/keystone"
 [workspace.dependencies]
 keystone-core = { path = "crates/keystone-core" }
 keystone-macos = { path = "crates/keystone-macos" }
+keystone-win32-sys = { path = "crates/keystone-win32-sys" }
+keystone-windows = { path = "crates/keystone-windows" }
 keystone-pki = { path = "crates/keystone-pki" }
 keystone-roles-anywhere = { path = "crates/keystone-roles-anywhere" }
 keystone-infra = { path = "crates/keystone-infra" }
@@ -30,6 +32,19 @@ rand = "0.8"
 # ownership check is what makes the permission check meaningful: a mode check
 # alone treats another user's file as safe.
 rustix = { version = "1", features = ["process"] }
+# Raw Win32/CNG declarations for `keystone-win32-sys`. Microsoft's own bindings
+# are used rather than hand-written `extern` blocks: a mistyped FFI signature is
+# undefined behavior that a macOS build cannot catch.
+windows-sys = { version = "0.60", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Memory",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
 rcgen = { version = "0.14", default-features = false, features = [
     "crypto",
     "pem",

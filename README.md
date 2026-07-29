@@ -1,6 +1,7 @@
 # Keystone
 
-Secure Enclave-backed temporary AWS credentials for macOS.
+Hardware-backed temporary AWS credentials, from the Secure Enclave on macOS or
+the TPM on Windows.
 
 ## Status
 
@@ -24,17 +25,17 @@ Three defects only a real account surfaced, each now regression-tested:
 
 ## Summary
 
-Keystone is a standalone macOS credential helper that exchanges a hardware-backed
+Keystone is a standalone credential helper that exchanges a hardware-backed
 device identity for temporary AWS credentials through AWS IAM Roles Anywhere.
 
-The long-lived private key is generated inside the Mac's Secure Enclave and is
-never exported. Keystone uses that key to sign an IAM Roles Anywhere
-`CreateSession` request. IAM Roles Anywhere validates the signature and X.509
-certificate, then returns ordinary temporary AWS credentials, which Keystone
+The long-lived private key is generated inside the Mac's Secure Enclave, or the
+PC's TPM, and is never exported. Keystone uses that key to sign an IAM Roles
+Anywhere `CreateSession` request. IAM Roles Anywhere validates the signature and
+X.509 certificate, then returns ordinary temporary AWS credentials, which Keystone
 emits through the standard AWS `credential_process` contract.
 
 ```text
-macOS Secure Enclave
+Secure Enclave (macOS) or TPM (Windows)
 P-256 signing key
         │
         ▼
@@ -60,21 +61,41 @@ CA, and biometric prompts for routine credential refresh.
 
 ## Building
 
-Requires a Mac with a Secure Enclave and a recent Rust toolchain. The Secure
-Enclave binding compiles a Swift bridge, so Xcode command line tools must be
-installed.
+Requires a recent Rust toolchain, and hardware with the key store for the target
+platform: a Mac with a Secure Enclave, or a PC with a TPM 2.0 enabled in firmware.
+There is no software fallback — on a machine without one, every operation reports
+that no hardware-backed key store is available.
+
+On macOS the Secure Enclave binding compiles a Swift bridge, so Xcode command line
+tools must be installed. On Windows nothing beyond the toolchain is needed; CNG is
+part of the OS.
 
 ```bash
 cargo build --release   # target/release/keystone
 ```
 
+The Windows build can be checked from macOS without a PC. `x86_64-pc-windows-msvc`
+does not work as a cross target here, because `ring` compiles C that needs the
+Windows SDK headers; the GNU target does:
+
+```bash
+rustup target add x86_64-pc-windows-gnu
+brew install mingw-w64
+CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc \
+AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar \
+  cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnu
+```
+
+That checks the code but runs nothing: the TPM tests need a TPM, so they are
+compiled only for Windows and must be run there.
+
 ## Workflow
 
 ```bash
 # --device-name also becomes the role session name, so CloudTrail and
-# `aws sts get-caller-identity` name this Mac rather than a hash of its key.
+# `aws sts get-caller-identity` name this machine rather than a hash of its key.
 keystone bootstrap --profile personal --region us-east-1 --ca-mode ephemeral \
-    --device-name my-macbook --generate-cdk ./keystone-infra
+    --device-name my-laptop --generate-cdk ./keystone-infra
 
 cd keystone-infra && npm install && npx cdk deploy --outputs-file cdk-outputs.json
 
@@ -96,6 +117,8 @@ region = us-east-1
 |---|---|
 | `keystone-core` | Configuration, the on-disk store, credentials, clock, errors |
 | `keystone-macos` | Secure Enclave key generation and signing |
+| `keystone-windows` | TPM key generation and signing, via CNG |
+| `keystone-win32-sys` | The FFI quarantine: the only crate allowed to use `unsafe` |
 | `keystone-pki` | Certificate parsing and validation, the ephemeral CA |
 | `keystone-roles-anywhere` | `AWS4-X509-ECDSA-SHA256` signing and the `CreateSession` client |
 | `keystone-infra` | CDK project generation and profile sync |
@@ -109,7 +132,7 @@ cargo test --workspace
 ```
 
 Everything that can run without external tooling or an AWS account runs by
-default, including the Secure Enclave tests when a Secure Enclave is present.
+default, including the hardware tests when the platform's key store is present.
 The rest are `#[ignore]`d:
 
 ```bash
