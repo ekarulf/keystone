@@ -96,10 +96,12 @@ Two workflows under `.github/workflows`:
 * `ci.yml` — formatting, `clippy -D warnings`, and the test suite on macOS and
   Windows runners, plus a `cargo check` against the declared MSRV of 1.88.
 * `release.yml` — builds `aarch64-apple-darwin` and `x86_64-pc-windows-msvc`
-  binaries, each packaged with a SHA-256 checksum in the format its platform
-  opens without extra tools: `.tar.gz` for macOS, `.zip` for Windows. A `v*` tag
-  drafts a GitHub release with both archives attached; a manual dispatch produces
-  the same archives as run artifacts and publishes nothing.
+  binaries, each with a SHA-256 checksum beside it. macOS ships as a `.tar.gz`,
+  because a tarball is what preserves the executable bit; Windows ships the
+  `keystone.exe` itself, since Windows decides executability by extension and a
+  container would only add a step. A `v*` tag drafts a GitHub release with both
+  attached; a manual dispatch produces the same files as run artifacts and
+  publishes nothing.
 
 Neither runner has a Secure Enclave or a TPM, so the hardware tests early-return
 and CI never exercises a signing path. That is the fail-closed design observed

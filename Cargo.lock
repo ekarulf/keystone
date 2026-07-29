@@ -848,7 +848,7 @@ dependencies = [
 
 [[package]]
 name = "keystone-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "fs2",
@@ -865,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "keystone-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "hex",
@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "keystone-infra"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "keystone-core",
  "keystone-pki",
@@ -896,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "keystone-macos"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "cryptokit-rs",
@@ -911,7 +911,7 @@ dependencies = [
 
 [[package]]
 name = "keystone-pki"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "hex",
@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "keystone-roles-anywhere"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "hex",
@@ -945,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "keystone-tests"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "hex",
@@ -965,14 +965,14 @@ dependencies = [
 
 [[package]]
 name = "keystone-win32-sys"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "windows-sys 0.60.2",
 ]
 
 [[package]]
 name = "keystone-windows"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "hex",

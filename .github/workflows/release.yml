@@ -54,10 +54,11 @@ jobs:
             os: windows-latest
             target: x86_64-pc-windows-msvc
             binary: keystone.exe
-            # Zip rather than tar.gz: Explorer opens it without a third-party
-            # tool, which a `.tar.gz` still needs on Windows 10. The executable
-            # bit that motivates tar on macOS has no meaning for a `.exe`.
-            archive: zip
+            # Shipped bare, not archived. The only reason to archive is the
+            # executable bit, which `upload-artifact` drops and which a `.exe`
+            # does not have — Windows decides by extension. A container would
+            # add an extraction step and protect nothing.
+            archive: none
     steps:
       - uses: actions/checkout@v5
 
@@ -81,10 +82,14 @@ jobs:
           ./target/${{ matrix.target }}/release/${{ matrix.binary }} --version
           ./target/${{ matrix.target }}/release/${{ matrix.binary }} --help > /dev/null
 
-      # Archived rather than uploaded bare, because `actions/upload-artifact`
-      # does not preserve the executable bit and a downloaded `keystone` that
-      # will not run is a confusing first impression. Each platform gets the
-      # format its users already have a tool for — see `archive` in the matrix.
+      # macOS gets a tarball, Windows gets the `.exe` itself.
+      #
+      # The only thing an archive buys is the executable bit, which
+      # `upload-artifact` drops and which a downloaded `keystone` needs to run at
+      # all. Windows decides executability by extension, so wrapping the `.exe`
+      # would add an extraction step and protect nothing. The tradeoff is that
+      # the Windows download carries no LICENSE beside it; the release page and
+      # the repository both do, and `keystone.exe` is one self-contained file.
       - name: Package
         id: package
         run: |
@@ -95,50 +100,39 @@ jobs:
             *) version="$(git rev-parse --short HEAD)" ;;
           esac
           name="keystone-${version}-${{ matrix.target }}"
-          archive="${name}.${{ matrix.archive }}"
-          mkdir -p "dist/${name}"
-          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${name}/"
-          cp README.md LICENSE "dist/${name}/"
-          # Both archives are built from inside `dist`, so each stores paths
-          # relative to the version directory rather than embedding `dist/`.
+          built="target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          mkdir -p dist
+
+          case "${{ matrix.archive }}" in
+            none)
+              # Versioned so two platforms' downloads never collide in a browser's
+              # download folder, and `.exe` last so Windows still recognises it.
+              archive="${name}.exe"
+              cp "${built}" "dist/${archive}"
+              ;;
+            tar.gz)
+              archive="${name}.tar.gz"
+              mkdir -p "dist/${name}"
+              cp "${built}" "dist/${name}/"
+              cp README.md LICENSE "dist/${name}/"
+              # Built from inside `dist` so the archive stores paths relative to
+              # the version directory rather than embedding `dist/`.
+              tar -czf "dist/${archive}" -C dist "${name}"
+              ;;
+          esac
+
+          # For verifying a download; not a signature, and not a substitute for
+          # one. It says the file arrived intact, not that this project produced
+          # it. Written from inside `dist` so the recorded name has no directory
+          # prefix and `-c` works wherever the file is unpacked. macOS has
+          # `shasum` and not `sha256sum`; Git Bash on the Windows runner has
+          # `sha256sum`, so both are tried rather than assuming.
           (
             cd dist
-            case "${{ matrix.archive }}" in
-              zip)
-                # 7z, not `Compress-Archive`: the latter wrote entry names with
-                # backslash separators, which the ZIP spec reserves forward
-                # slashes for. Explorer tolerates it, but `unzip` warns and
-                # Python's zipfile creates files with backslashes *in the name*
-                # instead of a directory. Git Bash here has no `zip` binary, so
-                # 7z is the one available tool that gets this right.
-                7z a -tzip "${archive}" "${name}" > /dev/null
-                ;;
-              tar.gz)
-                tar -czf "${archive}" "${name}"
-                ;;
-            esac
-            # For verifying a download; not a signature, and not a substitute for
-            # one. It says the file arrived intact, not that this project
-            # produced it. Written from inside `dist` so the recorded name has no
-            # directory prefix and `-c` works wherever the file is unpacked.
-            # macOS has `shasum` and not `sha256sum`; Git Bash on the Windows
-            # runner has `sha256sum`, so both are tried rather than assuming.
             if command -v sha256sum > /dev/null; then
               sha256sum "${archive}" > "${archive}.sha256"
             else
               shasum -a 256 "${archive}" > "${archive}.sha256"
-            fi
-
-            # A zip whose entries use backslashes extracts to garbage everywhere
-            # except Explorer, and the first version of this step produced one.
-            # Checked rather than trusted, because the failure is invisible on
-            # the platform that builds the archive.
-            if [ "${{ matrix.archive }}" = zip ]; then
-              if unzip -l "${archive}" | grep -q '\\'; then
-                echo "the zip uses backslash separators" >&2
-                exit 1
-              fi
-              unzip -l "${archive}" | grep -q "${name}/${{ matrix.binary }}"
             fi
           )
           echo "archive=dist/${archive}" >> "$GITHUB_OUTPUT"
@@ -176,7 +170,7 @@ jobs:
           # discovered as a release with no binaries on it. Four files: an
           # archive and a checksum for each of the two platforms.
           shopt -s nullglob
-          assets=(dist/*.tar.gz dist/*.zip dist/*.sha256)
+          assets=(dist/*.tar.gz dist/*.exe dist/*.sha256)
           printf '%s\n' "${assets[@]}"
           if [ "${#assets[@]}" -ne 4 ]; then
             echo "expected 4 assets, found ${#assets[@]}" >&2
