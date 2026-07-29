@@ -26,16 +26,28 @@ use windows_sys::Win32::Security::Authorization::{
 use windows_sys::Win32::Security::{
     AclSizeInformation, AddAccessAllowedAce, CreateWellKnownSid, EqualSid, GetAce,
     GetAclInformation, GetLengthSid, GetTokenInformation, InitializeAcl,
-    InitializeSecurityDescriptor, IsValidSid, SetSecurityDescriptorDacl, TokenUser,
-    WinBuiltinAdministratorsSid, ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, ACL_SIZE_INFORMATION,
-    DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE,
-    TOKEN_QUERY, TOKEN_USER,
+    InitializeSecurityDescriptor, IsValidSid, SetSecurityDescriptorControl,
+    SetSecurityDescriptorDacl, TokenUser, WinBuiltinAdministratorsSid, ACCESS_ALLOWED_ACE,
+    ACE_HEADER, ACE_INHERITED_OBJECT_TYPE_PRESENT, ACE_OBJECT_TYPE_PRESENT, ACL, ACL_REVISION,
+    ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
+    SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE, SE_DACL_PROTECTED, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_NONE,
 };
-use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
+use windows_sys::Win32::System::SystemServices::{
+    ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_ACE_TYPE,
+    ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE, ACCESS_ALLOWED_COMPOUND_ACE_TYPE,
+    ACCESS_ALLOWED_OBJECT_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, ACCESS_DENIED_CALLBACK_ACE_TYPE,
+    ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE, ACCESS_DENIED_OBJECT_ACE_TYPE, MAXIMUM_ALLOWED,
+    SECURITY_DESCRIPTOR_REVISION, SYSTEM_ACCESS_FILTER_ACE_TYPE, SYSTEM_ALARM_ACE_TYPE,
+    SYSTEM_ALARM_CALLBACK_ACE_TYPE, SYSTEM_ALARM_CALLBACK_OBJECT_ACE_TYPE,
+    SYSTEM_ALARM_OBJECT_ACE_TYPE, SYSTEM_AUDIT_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_ACE_TYPE,
+    SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE, SYSTEM_AUDIT_OBJECT_ACE_TYPE,
+    SYSTEM_MANDATORY_LABEL_ACE_TYPE, SYSTEM_PROCESS_TRUST_LABEL_ACE_TYPE,
+    SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE, SYSTEM_SCOPED_POLICY_ID_ACE_TYPE,
+};
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 use crate::{wide, Result, Win32Error};
@@ -46,6 +58,11 @@ use crate::{wide, Result, Win32Error};
 /// who can rewrite the ACL can grant itself write access, so treating it as
 /// harmless would make the whole check decorative. `DELETE` counts too — replacing
 /// a file wholesale is as good as editing it.
+/// `MAXIMUM_ALLOWED` counts as well, and is the easiest one to miss: it is not a
+/// specific right but a request for every right the DACL permits, resolved when the
+/// file is opened. An ACE granting it to another principal grants that principal
+/// whatever else the DACL would allow, so omitting it from this mask would let a
+/// single bit defeat every other entry here.
 const DANGEROUS_WRITE_MASK: u32 = {
     const FILE_WRITE_DATA: u32 = 0x0002;
     const FILE_APPEND_DATA: u32 = 0x0004;
@@ -65,13 +82,134 @@ const DANGEROUS_WRITE_MASK: u32 = {
         | WRITE_OWNER
         | GENERIC_WRITE
         | GENERIC_ALL
+        | MAXIMUM_ALLOWED
 };
 
 /// Full control over a file, for the owner-only ACE.
 const FILE_ALL_ACCESS: u32 = 0x001F_01FF;
 
-/// `ACCESS_ALLOWED_ACE_TYPE`.
-const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+/// How an ACE's SID is reached, which depends on its type.
+///
+/// Windows defines *five* allow-ACE types, not one, and they do not share a
+/// layout. `ACCESS_ALLOWED_ACE` puts the SID immediately after the mask; the object
+/// and callback-object forms insert a flags field and up to two GUIDs before it, and
+/// the compound form inserts two more fields and a second SID. Reading every type as
+/// `ACCESS_ALLOWED_ACE` would take the first bytes of a GUID as the start of a SID,
+/// so the type is classified before the SID is touched.
+enum AceKind {
+    /// The SID follows the mask directly: `ACCESS_ALLOWED_ACE_TYPE` and
+    /// `ACCESS_ALLOWED_CALLBACK_ACE_TYPE`, which appends opaque condition bytes
+    /// *after* the SID and so does not move it.
+    SidAfterMask,
+    /// `ACCESS_ALLOWED_OBJECT_ACE_TYPE` and
+    /// `ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE`: a `Flags` u32, then up to two
+    /// GUIDs, each present only if its bit is set in `Flags`.
+    ObjectAce,
+    /// An allow-ACE whose grantee this code declines to determine, currently only
+    /// `ACCESS_ALLOWED_COMPOUND_ACE_TYPE`. It carries two SIDs — a server and a
+    /// client — and their order is not pinned down by any header or documentation
+    /// available here, so picking one would be a guess in a place where guessing
+    /// wrong means reading a private file that another principal can write. It is
+    /// counted as a foreign writer instead. Nothing is lost: compound ACEs are a
+    /// legacy impersonation mechanism that does not appear on files, and an entry
+    /// whose grant depends on a *second* identity is not "the owner alone" in any
+    /// reading of it.
+    OpaqueAllow,
+    /// A deny, audit, or alarm ACE. Recognized, and cannot grant access to anyone:
+    /// a deny-ACE cannot make another principal a writer, and audit and alarm ACEs
+    /// only ask for logging. Skipping these is sound rather than merely convenient.
+    CannotGrant,
+    /// A type this code has never heard of. Counted as a foreign writer rather than
+    /// skipped: an unknown type may well grant access, its SID cannot be located to
+    /// see to whom, and "assume harmless" is the unsafe assumption.
+    Unknown,
+}
+
+impl AceKind {
+    fn classify(ace_type: u8) -> Self {
+        match u32::from(ace_type) {
+            ACCESS_ALLOWED_ACE_TYPE | ACCESS_ALLOWED_CALLBACK_ACE_TYPE => Self::SidAfterMask,
+            ACCESS_ALLOWED_OBJECT_ACE_TYPE | ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE => {
+                Self::ObjectAce
+            }
+            ACCESS_ALLOWED_COMPOUND_ACE_TYPE => Self::OpaqueAllow,
+            ACCESS_DENIED_ACE_TYPE
+            | ACCESS_DENIED_CALLBACK_ACE_TYPE
+            | ACCESS_DENIED_OBJECT_ACE_TYPE
+            | ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE
+            | SYSTEM_AUDIT_ACE_TYPE
+            | SYSTEM_AUDIT_CALLBACK_ACE_TYPE
+            | SYSTEM_AUDIT_OBJECT_ACE_TYPE
+            | SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE
+            | SYSTEM_ALARM_ACE_TYPE
+            | SYSTEM_ALARM_CALLBACK_ACE_TYPE
+            | SYSTEM_ALARM_OBJECT_ACE_TYPE
+            | SYSTEM_ALARM_CALLBACK_OBJECT_ACE_TYPE
+            | SYSTEM_MANDATORY_LABEL_ACE_TYPE
+            | SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE
+            | SYSTEM_SCOPED_POLICY_ID_ACE_TYPE
+            | SYSTEM_PROCESS_TRUST_LABEL_ACE_TYPE
+            | SYSTEM_ACCESS_FILTER_ACE_TYPE => Self::CannotGrant,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// Where an allow-ACE's SID starts, as a byte offset from the ACE.
+///
+/// `None` means the ACE is shorter than the fields its own type requires, so the
+/// offset would point past it. That is a malformed ACL rather than a hostile one,
+/// but the caller treats it the same way — the SID cannot be read, so the grantee is
+/// unknown.
+///
+/// Every offset returned is checked against `ace_size` before it is handed back, so
+/// a caller that respects the `None` cannot be led outside the ACE by a crafted
+/// header.
+fn sid_offset(ace: *const core::ffi::c_void, kind: &AceKind, ace_size: usize) -> Option<usize> {
+    /// `ACE_HEADER` plus the `ACCESS_MASK`, common to every ACE type.
+    const AFTER_MASK: usize = std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>();
+    const GUID_LEN: usize = std::mem::size_of::<windows_sys::core::GUID>();
+
+    let offset = match kind {
+        AceKind::SidAfterMask => AFTER_MASK,
+        AceKind::ObjectAce => {
+            // The two GUIDs are optional and independent: each is present only if
+            // its bit is set, and `InheritedObjectType` can be present while
+            // `ObjectType` is not. Assuming both — the shape of the struct
+            // definition — would skip 32 bytes past a SID that starts after 4.
+            let flags_end = AFTER_MASK + std::mem::size_of::<u32>();
+            if flags_end > ace_size {
+                return None;
+            }
+            // SAFETY: `flags_end <= ace_size`, so the `Flags` field lies within the
+            // ACE, which lives in the DACL buffer for the duration of the walk.
+            // `read_unaligned` because nothing guarantees the ACE's alignment
+            // within that buffer.
+            #[allow(unsafe_code)]
+            let flags = unsafe {
+                ace.cast::<u8>()
+                    .add(AFTER_MASK)
+                    .cast::<u32>()
+                    .read_unaligned()
+            };
+            let guids = usize::from(flags & ACE_OBJECT_TYPE_PRESENT != 0)
+                + usize::from(flags & ACE_INHERITED_OBJECT_TYPE_PRESENT != 0);
+            flags_end + guids * GUID_LEN
+        }
+        // These never reach here: the caller counts them without asking for an
+        // offset. Matched explicitly so adding a variant is a compile error rather
+        // than a silently wrong offset.
+        AceKind::OpaqueAllow | AceKind::CannotGrant | AceKind::Unknown => return None,
+    };
+
+    // A SID is at least 8 bytes (revision, sub-authority count, and the 6-byte
+    // identifier authority), so an ACE that does not have that much left after the
+    // fixed fields cannot hold one.
+    if offset.checked_add(8)? > ace_size {
+        return None;
+    }
+    Some(offset)
+}
 
 /// An owned copy of a SID.
 ///
@@ -331,29 +469,55 @@ pub fn file_access(path: &std::path::Path, expected: &Sid) -> Result<FileAccess>
             return Err(Win32Error::last("GetAce"));
         }
         // SAFETY: `ace` points at an ACE inside the DACL, which outlives this
-        // read. Only the header is read before the type is known.
+        // read. `ACE_HEADER` is the common prefix of every ACE type, so this is
+        // valid before the type is known — and nothing past it is read until the
+        // type has been classified.
         #[allow(unsafe_code)]
-        let header = unsafe { (*ace.cast::<ACCESS_ALLOWED_ACE>()).Header };
-        if header.AceType != ACCESS_ALLOWED_ACE_TYPE {
-            // Only allow-ACEs can grant access. A deny-ACE cannot make another
-            // principal a writer, so ignoring it here is conservative in the safe
-            // direction.
+        let header = unsafe { ace.cast::<ACE_HEADER>().read_unaligned() };
+        let ace_size = usize::from(header.AceSize);
+        let kind = AceKind::classify(header.AceType);
+        match kind {
+            // Cannot grant anything to anyone, so it cannot make another principal
+            // a writer.
+            AceKind::CannotGrant => continue,
+            // Might grant, to someone this code cannot identify. Fail closed: the
+            // caller refuses the file and tells the user to reset its ACL.
+            AceKind::OpaqueAllow | AceKind::Unknown => {
+                other_writers += 1;
+                continue;
+            }
+            AceKind::SidAfterMask | AceKind::ObjectAce => {}
+        }
+
+        // Every allow-ACE carries the mask immediately after the header; only the
+        // SID moves. Checked against the header's own size first, since a truncated
+        // ACE would otherwise have its mask read from the next one.
+        if ace_size < std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>() {
+            other_writers += 1;
             continue;
         }
-        // SAFETY: the type is `ACCESS_ALLOWED_ACE`, so `Mask` and `SidStart` are
-        // the documented layout.
+        // SAFETY: `ace` is a live ACE at least large enough for the header and the
+        // mask, and `ACCESS_ALLOWED_ACE`'s first two fields are exactly those, in
+        // that order, for every allow type. Read unaligned because the ACL packs
+        // ACEs without regard to this struct's alignment.
         #[allow(unsafe_code)]
-        let mask = unsafe { (*ace.cast::<ACCESS_ALLOWED_ACE>()).Mask };
+        let mask = unsafe { ace.cast::<ACCESS_ALLOWED_ACE>().read_unaligned().Mask };
         if mask & DANGEROUS_WRITE_MASK == 0 {
             continue;
         }
-        // The SID begins at `SidStart` and runs to the end of the ACE. Taking its
-        // address is the documented way to reach it.
-        // SAFETY: `SidStart` is a field within the live ACE; the resulting pointer
-        // is the start of that ACE's SID.
+
+        let Some(sid_offset) = sid_offset(ace, &kind, ace_size) else {
+            // The ACE is too short to hold the fields its own type requires, so its
+            // SID cannot be read. Malformed rather than hostile, but the grantee is
+            // just as unknown either way.
+            other_writers += 1;
+            continue;
+        };
+        // SAFETY: `sid_offset` is within the ACE, whose size the header reports and
+        // which lives inside the DACL buffer. `Sid::from_psid` validates the SID
+        // before copying it.
         #[allow(unsafe_code)]
-        let psid =
-            unsafe { std::ptr::addr_of!((*ace.cast::<ACCESS_ALLOWED_ACE>()).SidStart) } as PSID;
+        let psid = unsafe { ace.cast::<u8>().add(sid_offset) } as PSID;
         let sid = Sid::from_psid(psid)?;
         if !sid.matches(expected) {
             other_writers += 1;
@@ -494,6 +658,21 @@ pub fn create_owner_only_file(path: &std::path::Path, sid: &Sid) -> Result<Optio
     let ok = unsafe { SetSecurityDescriptorDacl(psd, 1, dacl.as_acl(), 0) } != 0;
     if !ok {
         return Err(Win32Error::last("SetSecurityDescriptorDacl"));
+    }
+
+    // Block inheritance, the counterpart of the `PROTECTED_DACL_SECURITY_INFORMATION`
+    // that [`apply_owner_only_dacl`] passes. An explicit DACL handed to `CreateFileW`
+    // does *not* by itself stop the directory's inheritable ACEs from being merged
+    // into the new file's DACL, so without this the file is created with the one ACE
+    // below plus whatever the parent propagates — which is precisely the widening
+    // this function exists to prevent.
+    // SAFETY: `psd` points at the initialized descriptor above, and the two control
+    // arguments are a mask and the bits to set within it.
+    #[allow(unsafe_code)]
+    let ok =
+        unsafe { SetSecurityDescriptorControl(psd, SE_DACL_PROTECTED, SE_DACL_PROTECTED) } != 0;
+    if !ok {
+        return Err(Win32Error::last("SetSecurityDescriptorControl"));
     }
 
     let attributes = SECURITY_ATTRIBUTES {

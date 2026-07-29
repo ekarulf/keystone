@@ -140,7 +140,7 @@ mod tests {
         let generated =
             SecureEnclaveIdentity::generate(key_id.clone(), AccessPolicy::default(), NOW).unwrap();
 
-        let device = DeviceCertificateSpec::new("erik-macbook", key_id.clone(), NOW);
+        let device = DeviceCertificateSpec::new("example-laptop", key_id.clone(), NOW);
         let ca = EphemeralCaSpec::new(key_id, NOW);
         let output = keystone_pki::ephemeral_ca::issue(
             &generated.identity.public_key_sec1().unwrap(),
@@ -228,7 +228,7 @@ mod tests {
             SecureEnclaveIdentity::generate(second_key_id.clone(), AccessPolicy::default(), NOW)
                 .unwrap();
 
-        let device = DeviceCertificateSpec::new("erik-macbook", second_key_id.clone(), NOW);
+        let device = DeviceCertificateSpec::new("example-laptop", second_key_id.clone(), NOW);
         let ca = EphemeralCaSpec::new(second_key_id, NOW);
         let output = keystone_pki::ephemeral_ca::issue(
             &second.identity.public_key_sec1().unwrap(),

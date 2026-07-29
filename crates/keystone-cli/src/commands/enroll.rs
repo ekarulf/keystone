@@ -82,7 +82,7 @@ fn device_name(args: &EnrollCsrArgs, key_id: &KeyId) -> Result<String> {
         return field(subject, "CN").ok_or_else(|| {
             KeystoneError::InvalidConfiguration(format!(
                 "--subject {subject:?} has no CN=. A subject looks like \
-                 \"CN=erik-macbook,OU=Keystone Devices,O=Example\"."
+                 \"CN=example-laptop,OU=Keystone Devices,O=Example\"."
             ))
         });
     }
@@ -146,12 +146,15 @@ fn install(context: &Context, args: &EnrollInstallArgs) -> Result<()> {
     }
 
     // Keystone stores exactly one issuer alongside the leaf, and it must be the
-    // trust anchor AWS holds. An intermediate would have to travel in
-    // `x-amz-x509-chain`, which the MVP does not carry.
+    // trust anchor AWS holds. The signing layer *can* present intermediates —
+    // `request.rs` sets `x-amz-x509-chain` whenever the identity carries any — but
+    // the store has nowhere to keep them, so `identity.rs` always builds an
+    // identity with an empty chain. Accepting them here would silently drop them
+    // and produce a request AWS cannot validate.
     if !intermediates.is_empty() {
         return Err(KeystoneError::InvalidCertificateChain(format!(
-            "the chain contains {} intermediate certificate(s). Keystone v1 registers the \
-             issuing CA itself as the trust anchor, so supply a chain of exactly the issuing CA.",
+            "the chain contains {} intermediate certificate(s). Keystone registers the issuing \
+             CA itself as the trust anchor, so supply a chain of exactly the issuing CA.",
             intermediates.len()
         )));
     }
@@ -273,14 +276,14 @@ mod tests {
     fn a_subject_string_yields_the_common_name_and_organization() {
         let args = EnrollCsrArgs {
             profile: "personal".to_string(),
-            subject: Some("CN=erik-macbook,OU=Keystone Devices,O=Karulf".to_string()),
+            subject: Some("CN=example-laptop,OU=Keystone Devices,O=Example".to_string()),
             device_name: None,
             san_uri: None,
             output: std::path::PathBuf::from("out.csr"),
         };
         let key_id = KeyId::generate();
-        assert_eq!(device_name(&args, &key_id).unwrap(), "erik-macbook");
-        assert_eq!(organization(&args).as_deref(), Some("Karulf"));
+        assert_eq!(device_name(&args, &key_id).unwrap(), "example-laptop");
+        assert_eq!(organization(&args).as_deref(), Some("Example"));
     }
 
     #[test]
@@ -293,7 +296,7 @@ mod tests {
             output: std::path::PathBuf::from("out.csr"),
         };
         let error = device_name(&args, &KeyId::generate()).unwrap_err();
-        assert!(format!("{error}").contains("CN=erik-macbook"), "{error}");
+        assert!(format!("{error}").contains("CN=example-laptop"), "{error}");
     }
 
     #[test]

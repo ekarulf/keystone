@@ -215,8 +215,8 @@ mod tests {
       "credentialSet": [
         {
           "assumedRoleUser": {
-            "arn": "arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/erik-macbook",
-            "assumedRoleId": "AROAEXAMPLE:erik-macbook"
+            "arn": "arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/example-laptop",
+            "assumedRoleId": "AROAEXAMPLE:example-laptop"
           },
           "credentials": {
             "accessKeyId": "ASIAEXAMPLE",
@@ -226,7 +226,7 @@ mod tests {
           },
           "packedPolicySize": 0,
           "roleArn": "arn:aws:iam::123456789012:role/KeystonePersonalMac",
-          "sourceIdentity": "erik-macbook"
+          "sourceIdentity": "example-laptop"
         }
       ],
       "subjectArn": "arn:aws:rolesanywhere:us-east-1:123456789012:subject/abc"

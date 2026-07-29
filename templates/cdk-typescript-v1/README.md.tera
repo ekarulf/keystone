@@ -24,8 +24,9 @@ Regenerate with `keystone infra cdk init --profile {{ profile_name }} --output .
 | Device certificate expires | {{ certificate_expires_at }} |
 {%- endif %}
 
-**This project contains only public data.** The device private key is in the
-Secure Enclave and cannot be exported.
+**This project contains only public data.** The device private key is held by
+the machine's secure hardware — the Secure Enclave on macOS, the TPM on
+Windows — and cannot be exported.
 {%- if issuer_mode == "ephemeral-ca" %} The CA private key was destroyed
 immediately after it signed the device certificate and was never written to
 disk, so there is no `ca-private-key.pem` here and never will be.

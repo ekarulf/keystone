@@ -1,4 +1,4 @@
-//! Keystone identity metadata: the public half of a Secure Enclave key.
+//! Keystone identity metadata: the public half of a hardware-held key.
 
 use base64::prelude::{Engine as _, BASE64_STANDARD};
 use serde::{Deserialize, Serialize};

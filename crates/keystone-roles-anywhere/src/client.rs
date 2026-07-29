@@ -140,9 +140,15 @@ impl<I: AwsX509Identity, C: Clock> RolesAnywhereClient<I, C> {
 
     /// Exchange the device identity for temporary credentials.
     ///
-    /// Every attempt is signed afresh: AWS rejects a stale `x-amz-date`, so
-    /// reusing the first attempt's signature after a backoff would turn a
-    /// transient network failure into a signature error.
+    /// Every attempt re-signs rather than resending the first attempt's bytes.
+    /// Whether the timestamp advances is the *clock's* choice, not this loop's:
+    /// with a [`keystone_core::time::SystemClock`] each retry gets a current
+    /// `x-amz-date`, and with a `FixedClock` — which is what the CLI passes, so
+    /// that one command uses one validated timestamp throughout — every retry
+    /// carries the same one. That is safe only because the whole retry sequence
+    /// stays well under a second (see `retry.rs`, which tests exactly that),
+    /// nowhere near AWS's skew tolerance. A policy with minutes of backoff would
+    /// need a system clock here.
     pub fn create_session(&self, request: &CreateSessionRequest) -> Result<SessionResult> {
         self.create_session_recording(request, &mut Vec::new())
     }
@@ -274,7 +280,7 @@ mod tests {
             trust_anchor_arn: "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/t"
                 .to_string(),
             duration_seconds: 3600,
-            role_session_name: Some("erik-macbook".to_string()),
+            role_session_name: Some("example-laptop".to_string()),
         }
     }
 

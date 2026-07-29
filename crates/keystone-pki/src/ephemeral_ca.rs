@@ -2,14 +2,15 @@
 //!
 //! The CA key exists only inside this module's `issue` call: it is generated,
 //! used to sign a self-signed CA certificate and exactly one device
-//! certificate, then zeroized. Nothing here returns, serializes, or accepts a
-//! CA private key, so no caller can persist one — the design's "the CA key must
-//! not be written to the ordinary filesystem" is enforced by the API shape
-//! rather than by convention.
+//! certificate, then dropped. Nothing here returns, serializes, or accepts a CA
+//! private key, so no caller can persist one — the design's "the CA key must not
+//! be written to the ordinary filesystem" is enforced by the API shape rather
+//! than by convention.
 //!
-//! Perfect erasure from process memory cannot be proven on a general-purpose
-//! OS. Zeroization plus a short-lived process is the mitigation, not a
-//! guarantee.
+//! Dropping is not erasure. The private scalar lives inside *ring*, which exposes
+//! no way to scrub it, so it remains in freed process memory until that memory is
+//! reused; see [`EphemeralCaKey`] for what that does and does not leave exposed.
+//! Unreachability plus a short-lived process is the mitigation, not a guarantee.
 
 use keystone_core::error::{KeystoneError, Result};
 use keystone_core::identity::Sha256Fingerprint;
@@ -152,8 +153,9 @@ pub fn issue(
                 KeystoneError::Other(format!("cannot sign the device certificate: {e}"))
             })?;
 
-        // The CA key is dropped — and zeroized — at the end of this block,
-        // before anything is returned to the caller.
+        // The CA key is dropped at the end of this block, before anything is
+        // returned to the caller, which is what makes it unreachable. It is not
+        // scrubbed — see `EphemeralCaKey`.
         (
             ca_certificate.der().to_vec(),
             device_certificate.der().to_vec(),
@@ -219,7 +221,7 @@ mod tests {
 
     fn specs(key_id: &KeyId) -> (DeviceCertificateSpec, EphemeralCaSpec) {
         (
-            DeviceCertificateSpec::new("erik-macbook", key_id.clone(), NOW),
+            DeviceCertificateSpec::new("example-laptop", key_id.clone(), NOW),
             EphemeralCaSpec::new(key_id.clone(), NOW),
         )
     }
@@ -315,7 +317,7 @@ mod tests {
     fn a_ca_that_expires_before_the_device_certificate_is_refused() {
         // The chain would stop validating while the leaf still looked current.
         let key_id = KeyId::generate();
-        let device = DeviceCertificateSpec::new("erik-macbook", key_id.clone(), NOW)
+        let device = DeviceCertificateSpec::new("example-laptop", key_id.clone(), NOW)
             .with_validity(NOW, NOW + time::Duration::days(1000));
         let ca =
             EphemeralCaSpec::new(key_id, NOW).with_validity(NOW, NOW + time::Duration::days(500));

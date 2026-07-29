@@ -7,8 +7,8 @@
 //! signatures. Auditing Keystone's use of unsafe means reading this one
 //! directory.
 //!
-//! Two modules, matching the two things Windows must provide that Unix gets from
-//! the Secure Enclave and from file modes:
+//! Two modules, matching the two things Windows must provide that macOS gets from
+//! CryptoKit and that Unix gets from file modes:
 //!
 //! * [`cng`] — a non-exportable P-256 signing key in the TPM, via the Microsoft
 //!   Platform Crypto Provider.

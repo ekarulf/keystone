@@ -158,14 +158,14 @@ the issuing CA keys are deleted at the end of that script by design.
 The two device private keys under `tests/fixtures/` are committed on purpose and
 authenticate nothing — the golden suite has to sign fixed bytes the way the
 official AWS helper would. Secret scanners flag them. A real Keystone device key
-cannot look like this: it is generated inside the Secure Enclave and has no PEM
-form.
+cannot look like this: it is generated inside the Secure Enclave or the TPM and
+has no PEM form.
 
 ## Documentation
 
 * [Design document](docs/DESIGN.md) — security model, PKI and ephemeral CA
-  bootstrap, AWS4-X509 signing, CDK generation, rotation and revocation,
-  testing strategy, and the phased implementation plan.
+  bootstrap, AWS4-X509 signing, CDK generation, rotation and revocation, and
+  testing strategy.
 
 ## License
 

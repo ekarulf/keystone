@@ -1,7 +1,7 @@
-//! The Phase 1 deliverable: `Secure Enclave key → CreateSession`.
+//! The whole path in one test: `Secure Enclave key → CreateSession`.
 //!
-//! Phase 0 proved the AWS protocol with a software P-256 key. This is the same
-//! exchange — the same signing code, the same stub server, the same response
+//! `keystone-roles-anywhere`'s own end-to-end tests prove the AWS protocol with a
+//! software P-256 key. This is the same exchange — the same signing code, the same stub server, the same response
 //! parsing — with the signer replaced by a key that was generated inside the
 //! Secure Enclave and cannot be exported. What it proves that the unit tests
 //! cannot is that the two halves fit: CryptoKit's raw `r || s` signature over
@@ -35,13 +35,13 @@ use time::OffsetDateTime;
 
 const NOW: OffsetDateTime = time::macros::datetime!(2026-07-26 01:15:00 UTC);
 const REGION: &str = "us-east-1";
-const DEVICE_NAME: &str = "erik-macbook";
+const DEVICE_NAME: &str = "example-laptop";
 
 const SUCCESS_BODY: &str = r#"{
   "credentialSet": [
     {
       "assumedRoleUser": {
-        "arn": "arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/erik-macbook"
+        "arn": "arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/example-laptop"
       },
       "credentials": {
         "accessKeyId": "ASIAEXAMPLE",
@@ -126,7 +126,7 @@ fn client<I: AwsX509Identity>(
 
 #[test]
 fn a_secure_enclave_key_is_exchanged_for_temporary_credentials() {
-    // The Phase 1 deliverable. Nothing here is a mock except the AWS endpoint:
+    // Nothing here is a mock except the AWS endpoint:
     // the private key is in hardware, the certificate is real X.509, and the
     // request is the one AWS would receive.
     let Some(boot) = bootstrap() else { return };

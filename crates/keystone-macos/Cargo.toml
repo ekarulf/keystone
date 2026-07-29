@@ -20,8 +20,9 @@ cryptokit-rs.workspace = true
 
 [dev-dependencies]
 keystone-pki = { workspace = true, features = ["testing"] }
-# The end-to-end test drives the same stub server as the Phase 0 tests, and the
-# endpoint override that points the client at it lives behind this feature.
+# The end-to-end test drives the same stub server as the software-key tests in
+# `keystone-roles-anywhere`, and the endpoint override that points the client at
+# it lives behind this feature.
 keystone-roles-anywhere = { workspace = true, features = ["testing"] }
 hex.workspace = true
 p256.workspace = true

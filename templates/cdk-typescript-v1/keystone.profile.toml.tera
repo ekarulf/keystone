@@ -4,7 +4,7 @@
 # unknown until `cdk deploy` runs, and the local profile is updated by
 # `keystone infra cdk sync-profile --profile {{ profile_name }} --outputs ./cdk-outputs.json`.
 #
-# Contains only public data. The Secure Enclave key reference is not here.
+# Contains only public data. The hardware key reference is not here.
 generated_by = "keystone"
 generator_version = "{{ generator_version }}"
 template_version = {{ template_version }}

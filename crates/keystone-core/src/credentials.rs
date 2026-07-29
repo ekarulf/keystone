@@ -123,7 +123,11 @@ impl std::fmt::Debug for CredentialProcessOutput {
 }
 
 /// A cached credential set, as stored under the cache directory.
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// Same secrets and same protections as [`CredentialProcessOutput`]: a
+/// hand-written `Debug` and a zeroizing `Drop`, with the fields left as plain
+/// `String`s for `serde`'s sake.
+#[derive(Serialize, Deserialize)]
 pub struct CachedCredentials {
     pub version: u8,
     pub access_key_id: String,
@@ -181,6 +185,20 @@ impl Drop for CachedCredentials {
         use zeroize::Zeroize;
         self.secret_access_key.zeroize();
         self.session_token.zeroize();
+    }
+}
+
+impl std::fmt::Debug for CachedCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedCredentials")
+            .field("version", &self.version)
+            .field("access_key_id", &self.access_key_id)
+            .field("secret_access_key", &"<redacted>")
+            .field("session_token", &"<redacted>")
+            .field("expiration", &self.expiration)
+            .field("profile", &self.profile)
+            .field("role_arn", &self.role_arn)
+            .finish()
     }
 }
 
@@ -249,12 +267,24 @@ mod tests {
 
     #[test]
     fn debug_output_never_contains_secret_material() {
+        // All three credential-carrying types, because each has its own
+        // hand-written `Debug` and any one of them reverting to a derive would
+        // reintroduce the leak.
         let creds = credentials(NOW + time::Duration::hours(1));
-        let rendered = format!("{creds:?}");
-        assert!(!rendered.contains("secret-value"), "{rendered}");
-        assert!(!rendered.contains("token-value"), "{rendered}");
-        // The access key id is not secret and is useful when diagnosing.
-        assert!(rendered.contains("ASIAEXAMPLE"));
+        let rendered = vec![
+            format!("{creds:?}"),
+            format!("{:?}", creds.to_process_output()),
+            format!(
+                "{:?}",
+                CachedCredentials::new(&creds, "personal", "arn:aws:iam::1:role/R")
+            ),
+        ];
+        for rendered in rendered {
+            assert!(!rendered.contains("secret-value"), "{rendered}");
+            assert!(!rendered.contains("token-value"), "{rendered}");
+            // The access key id is not secret and is useful when diagnosing.
+            assert!(rendered.contains("ASIAEXAMPLE"), "{rendered}");
+        }
     }
 
     #[test]

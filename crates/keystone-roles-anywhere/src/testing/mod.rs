@@ -1,15 +1,14 @@
 //! Test doubles for the `CreateSession` path.
 //!
-//! [`TestIdentity`] exists so the AWS protocol layer can be exercised without a
-//! Secure Enclave, and so golden and differential tests can use a key the
-//! official helper can also load. It is compiled only for tests and behind the
-//! `testing` feature — Keystone never falls back to a software key in
-//! production.
+//! [`TestIdentity`] exists so the AWS protocol layer can be exercised without
+//! hardware, and so golden and differential tests can use a key the official
+//! helper can also load. It is compiled only for tests and behind the `testing`
+//! feature — Keystone never falls back to a software key in production.
 //!
 //! [`stub_server`] lives here rather than in this crate's `tests/` directory so
-//! that `keystone-macos` can drive the same harness with a real Secure Enclave
-//! key: the Phase 1 deliverable is the *same* end-to-end exchange with the
-//! signer swapped, and a second copy of the server could drift from this one.
+//! that `keystone-macos` and `keystone-windows` can drive the same harness with a
+//! real hardware key. Those tests are the *same* end-to-end exchange with only
+//! the signer swapped, and a second copy of the server could drift from this one.
 
 pub mod stub_server;
 

@@ -42,7 +42,7 @@ pub fn system_clock() -> Arc<dyn Clock> {
 
 /// Earliest time Keystone believes could be "now".
 ///
-/// A Mac with a dead coin cell or a failed time sync can report a date decades
+/// A machine with a dead coin cell or a failed time sync can report a date decades
 /// off. Signing against such a clock produces a rejection that reads like a
 /// certificate problem, so it is worth catching locally with a specific
 /// message. This bound only has to be old enough to never reject a real clock;

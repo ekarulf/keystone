@@ -316,7 +316,7 @@ mod tests {
     fn a_certificate_without_a_device_san_is_refused() {
         let ca = TestCa::generate();
         let key = testing::random_device_key();
-        let der = ca.issue_certificate_with_uri_san(&key, "erik-macbook", None);
+        let der = ca.issue_certificate_with_uri_san(&key, "example-laptop", None);
         let leaf = ParsedCertificate::from_der(&der).unwrap();
 
         assert!(matches!(
@@ -330,7 +330,7 @@ mod tests {
         let ca = TestCa::generate();
         let key = testing::random_device_key();
         let der =
-            ca.issue_certificate_with_uri_san(&key, "erik-macbook", Some("urn:example:device:1"));
+            ca.issue_certificate_with_uri_san(&key, "example-laptop", Some("urn:example:device:1"));
         let leaf = ParsedCertificate::from_der(&der).unwrap();
         assert!(matches!(
             validate_device_certificate(&leaf, &ValidationContext::new(NOW)),
@@ -419,7 +419,7 @@ mod tests {
 
         let leaf_der = real.issue_device_certificate(
             &key,
-            "erik-macbook",
+            "example-laptop",
             &key_id,
             NOW - time::Duration::days(1),
             NOW + time::Duration::days(365),

@@ -11,7 +11,7 @@ pub fn run(context: &Context) -> Result<()> {
         context.note("");
         context.note("Create one:");
         context.note(
-            "    keystone bootstrap --profile personal --region us-east-1 --device-name my-mac",
+            "    keystone bootstrap --profile personal --region us-east-1 --device-name my-laptop",
         );
         return Ok(());
     }

@@ -309,7 +309,7 @@ pub fn validate_role_session_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// How the Secure Enclave key may be used.
+/// How the hardware key may be used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum KeyAccessibility {
@@ -409,7 +409,7 @@ impl Paths {
         Self::platform_default()
     }
 
-    /// The standard macOS locations.
+    /// The standard macOS locations, also used on any other non-Windows target.
     #[cfg(not(windows))]
     fn platform_default() -> Result<Self> {
         let home = std::env::var_os("HOME")
@@ -652,7 +652,7 @@ region = "us-east-1"
 trust_anchor_arn = "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/abc"
 roles_anywhere_profile_arn = "arn:aws:rolesanywhere:us-east-1:123456789012:profile/def"
 role_arn = "arn:aws:iam::123456789012:role/KeystonePersonalMac"
-role_session_name = "erik-macbook"
+role_session_name = "example-laptop"
 duration_seconds = 3600
 key_id = "019cabc"
 refresh_before_seconds = 300
@@ -797,7 +797,7 @@ certificate_expires_at = "2031-07-25T00:00:00Z"
 
     #[test]
     fn role_session_names_follow_the_iam_character_set() {
-        validate_role_session_name("erik-macbook").unwrap();
+        validate_role_session_name("example-laptop").unwrap();
         assert!(validate_role_session_name("a").is_err());
         assert!(validate_role_session_name("has space").is_err());
         assert!(validate_role_session_name(&"x".repeat(65)).is_err());
@@ -813,7 +813,7 @@ certificate_expires_at = "2031-07-25T00:00:00Z"
             .unwrap();
         assert_eq!(ready.region, "us-east-1");
         assert_eq!(ready.duration_seconds, 3600);
-        assert_eq!(ready.role_session_name, Some("erik-macbook"));
+        assert_eq!(ready.role_session_name, Some("example-laptop"));
     }
 
     #[test]

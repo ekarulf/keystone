@@ -169,7 +169,7 @@ mod tests {
         let key_id = KeyId::generate();
         let generated = TpmIdentity::generate(key_id.clone(), TpmPolicy::default(), NOW).unwrap();
 
-        let device = DeviceCertificateSpec::new("erik-pc", key_id.clone(), NOW);
+        let device = DeviceCertificateSpec::new("example-desktop", key_id.clone(), NOW);
         let ca = EphemeralCaSpec::new(key_id, NOW);
         let output = keystone_pki::ephemeral_ca::issue(
             &generated.identity.public_key_sec1().unwrap(),
@@ -279,10 +279,13 @@ mod tests {
     }
 
     #[test]
-    fn a_restored_identity_signs_identically_to_the_generated_one() {
+    fn a_restored_identity_is_the_same_key_and_can_still_sign() {
         // The name-not-blob difference from macOS: the whole restore path is
         // `open` plus a public-key comparison, so it deserves a live test that the
-        // reopened handle is the same key.
+        // reopened handle is the same key. Sameness is the *public key*, not the
+        // signature — ECDSA is randomized, so two signatures over the same bytes
+        // differ even from one key. `self_test` is what proves it still signs
+        // verifiably.
         if !tpm::is_available().expect("querying the TPM") {
             return;
         }
@@ -341,7 +344,7 @@ mod tests {
         let second =
             TpmIdentity::generate(second_key_id.clone(), TpmPolicy::default(), NOW).unwrap();
 
-        let device = DeviceCertificateSpec::new("erik-pc", second_key_id.clone(), NOW);
+        let device = DeviceCertificateSpec::new("example-desktop", second_key_id.clone(), NOW);
         let ca = EphemeralCaSpec::new(second_key_id, NOW);
         let output = keystone_pki::ephemeral_ca::issue(
             &second.identity.public_key_sec1().unwrap(),

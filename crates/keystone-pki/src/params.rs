@@ -193,7 +193,7 @@ mod tests {
     const NOW: OffsetDateTime = time::macros::datetime!(2026-07-26 01:15:00 UTC);
 
     fn spec() -> DeviceCertificateSpec {
-        DeviceCertificateSpec::new("erik-macbook", KeyId::parse("019cabc").unwrap(), NOW)
+        DeviceCertificateSpec::new("example-laptop", KeyId::parse("019cabc").unwrap(), NOW)
     }
 
     #[test]
@@ -232,12 +232,12 @@ mod tests {
 
     #[test]
     fn the_device_subject_names_the_keystone_ou() {
-        let spec = spec().with_organization(Some("Karulf".to_string()));
+        let spec = spec().with_organization(Some("Example Org".to_string()));
         let params = spec.to_params().unwrap();
         let rendered = format!("{:?}", params.distinguished_name);
-        assert!(rendered.contains("erik-macbook"), "{rendered}");
+        assert!(rendered.contains("example-laptop"), "{rendered}");
         assert!(rendered.contains(DEVICE_OU), "{rendered}");
-        assert!(rendered.contains("Karulf"), "{rendered}");
+        assert!(rendered.contains("Example Org"), "{rendered}");
     }
 
     #[test]

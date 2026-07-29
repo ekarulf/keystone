@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn a_request_is_signed_by_the_device_key_and_self_verifies() {
         let key = testing::random_device_key();
-        let spec = DeviceCertificateSpec::new("erik-macbook", key.key_id().clone(), TEST_NOW);
+        let spec = DeviceCertificateSpec::new("example-laptop", key.key_id().clone(), TEST_NOW);
         let request = create_signing_request(&key, &spec).unwrap();
 
         // `verify_request` already ran inside the constructor; run it again on
@@ -138,7 +138,7 @@ mod tests {
         use x509_parser::prelude::FromDer as _;
 
         let key = testing::random_device_key();
-        let spec = DeviceCertificateSpec::new("erik-macbook", key.key_id().clone(), TEST_NOW);
+        let spec = DeviceCertificateSpec::new("example-laptop", key.key_id().clone(), TEST_NOW);
         let request = create_signing_request(&key, &spec).unwrap();
 
         let (_, parsed) =
@@ -149,7 +149,7 @@ mod tests {
             info.subject_pki.subject_public_key.as_ref(),
             key.public_key_sec1().as_slice()
         );
-        assert!(info.subject.to_string().contains("erik-macbook"));
+        assert!(info.subject.to_string().contains("example-laptop"));
 
         let rendered = format!("{:?}", info.attributes());
         assert!(
@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn a_request_round_trips_through_pem() {
         let key = testing::random_device_key();
-        let spec = DeviceCertificateSpec::new("erik-macbook", key.key_id().clone(), TEST_NOW);
+        let spec = DeviceCertificateSpec::new("example-laptop", key.key_id().clone(), TEST_NOW);
         let request = create_signing_request(&key, &spec).unwrap();
 
         let pem = request.to_pem();
@@ -182,7 +182,7 @@ mod tests {
     #[test]
     fn a_corrupted_request_does_not_verify() {
         let key = testing::random_device_key();
-        let spec = DeviceCertificateSpec::new("erik-macbook", key.key_id().clone(), TEST_NOW);
+        let spec = DeviceCertificateSpec::new("example-laptop", key.key_id().clone(), TEST_NOW);
         let request = create_signing_request(&key, &spec).unwrap();
 
         // Flip a byte in the middle of the signed body.
@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn trailing_bytes_after_a_request_are_refused() {
         let key = testing::random_device_key();
-        let spec = DeviceCertificateSpec::new("erik-macbook", key.key_id().clone(), TEST_NOW);
+        let spec = DeviceCertificateSpec::new("example-laptop", key.key_id().clone(), TEST_NOW);
         let request = create_signing_request(&key, &spec).unwrap();
 
         let mut der = request.der().to_vec();
@@ -234,7 +234,7 @@ mod tests {
             key_id: real.key_id().clone(),
             public_key: real.public_key_sec1(),
         };
-        let spec = DeviceCertificateSpec::new("erik-macbook", real.key_id().clone(), TEST_NOW);
+        let spec = DeviceCertificateSpec::new("example-laptop", real.key_id().clone(), TEST_NOW);
         let error = create_signing_request(&signer, &spec).unwrap_err();
         assert!(matches!(error, KeystoneError::SecureEnclave(_)), "{error}");
     }
@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn an_invalid_subject_is_refused_before_the_key_is_used() {
         let key = testing::random_device_key();
-        let mut spec = DeviceCertificateSpec::new("erik-macbook", key.key_id().clone(), TEST_NOW);
+        let mut spec = DeviceCertificateSpec::new("example-laptop", key.key_id().clone(), TEST_NOW);
         spec.device_name = "bad\nname".to_string();
         assert!(matches!(
             create_signing_request(&key, &spec),

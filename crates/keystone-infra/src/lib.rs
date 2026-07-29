@@ -12,7 +12,7 @@
 //! plainly: "Keystone source generation must not automatically run `cdk deploy`."
 //!
 //! *Public data only.* The generated project embeds the CA certificate, the
-//! device's URI SAN, and fingerprints. It never contains the Secure Enclave key
+//! device's URI SAN, and fingerprints. It never contains the hardware key
 //! reference, and it never contains a CA private key — for an ephemeral-CA
 //! profile that key was destroyed before this code could see it. [`plan`] carries
 //! only public fields, so there is nothing secret to hand a template.

@@ -38,8 +38,10 @@
 //! the suite is silent rather than failing on a machine with no account wired
 //! up, and compiled only for a target with a hardware key store, since it signs
 //! with the real device key. It is written against the `backend` aliases below so
-//! the Secure Enclave and the TPM face the same assertions. These tests only read: they call `CreateSession`, deliberately malformed
-//! or not, and `sts:GetCallerIdentity`. They create, modify, and delete nothing.
+//! the Secure Enclave and the TPM face the same assertions.
+//!
+//! These tests only read: they call `CreateSession`, deliberately malformed or
+//! not, and `sts:GetCallerIdentity`. They create, modify, and delete nothing.
 //!
 //! ```text
 //! KEYSTONE_AWS_INTEGRATION_PROFILE=personal \
@@ -93,8 +95,8 @@ const SUCCESS_BODY: &str = r#"{
   "credentialSet": [
     {
       "assumedRoleUser": {
-        "arn": "arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/erik-macbook",
-        "assumedRoleId": "AROAEXAMPLE:erik-macbook"
+        "arn": "arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/example-laptop",
+        "assumedRoleId": "AROAEXAMPLE:example-laptop"
       },
       "credentials": {
         "accessKeyId": "ASIAEXAMPLE",
@@ -104,7 +106,7 @@ const SUCCESS_BODY: &str = r#"{
       },
       "packedPolicySize": 0,
       "roleArn": "arn:aws:iam::123456789012:role/KeystonePersonalMac",
-      "sourceIdentity": "erik-macbook"
+      "sourceIdentity": "example-laptop"
     }
   ],
   "subjectArn": "arn:aws:rolesanywhere:us-east-1:123456789012:subject/abc"
@@ -152,7 +154,7 @@ fn request() -> CreateSessionRequest {
         role_arn: ROLE_ARN.to_string(),
         trust_anchor_arn: TRUST_ANCHOR_ARN.to_string(),
         duration_seconds: 3600,
-        role_session_name: Some("erik-macbook".to_string()),
+        role_session_name: Some("example-laptop".to_string()),
     }
 }
 
@@ -254,7 +256,7 @@ fn a_valid_identity_is_exchanged_for_credentials() {
     assert_eq!(result.credentials.access_key_id, "ASIAEXAMPLE");
     assert_eq!(
         result.assumed_role_arn.as_deref(),
-        Some("arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/erik-macbook")
+        Some("arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/example-laptop")
     );
 
     // The identity that reached AWS is the certificate, not the key: the leaf is

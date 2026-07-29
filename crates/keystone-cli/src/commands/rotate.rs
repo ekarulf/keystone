@@ -314,14 +314,30 @@ fn activate(
             certificate.display_short()
         ));
         context.note("rollback. Remove them when the new anchor is confirmed:");
-        context.note(format!(
-            "    rm {}",
-            context.store.paths().identity_file(key_id).display()
-        ));
-        context.note(format!(
-            "    rm -r {}",
-            context.store.paths().certificate_dir(certificate).display()
-        ));
+        let identity_file = context.store.paths().identity_file(key_id);
+        let certificate_dir = context.store.paths().certificate_dir(certificate);
+        // Two shells, two spellings. Printing `rm` on Windows would be advice the
+        // user cannot follow, and this text is the only instruction they get.
+        if cfg!(windows) {
+            context.note(format!("    del {}", identity_file.display()));
+            context.note(format!("    rmdir /s /q {}", certificate_dir.display()));
+        } else {
+            context.note(format!("    rm {}", identity_file.display()));
+            context.note(format!("    rm -r {}", certificate_dir.display()));
+        }
+        // On Windows the private key outlives its metadata: CNG persists it under a
+        // name, so deleting the file above leaves the key in the TPM. Said plainly
+        // here because nothing else will mention it, and a TPM has few slots.
+        if cfg!(windows) {
+            context.note("");
+            context.note(
+                "Deleting the identity file does not remove the old key from the TPM. To free",
+            );
+            context.note("its slot once rollback is no longer wanted:");
+            context.note(format!(
+                "    certutil -csp \"Microsoft Platform Crypto Provider\" -delkey Keystone-{key_id}"
+            ));
+        }
     }
     Ok(())
 }

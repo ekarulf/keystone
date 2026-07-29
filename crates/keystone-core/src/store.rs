@@ -35,18 +35,27 @@ impl Store {
         &self.paths
     }
 
+    /// Refuse to act on a file another user could have written.
+    ///
+    /// Call this *before* reading, not after: the point of the check is to decline
+    /// to interpret content someone else controls, and parsing first means the
+    /// untrusted bytes have already been interpreted. A file that does not exist
+    /// is not an error here — the caller reports the absence in its own terms,
+    /// which are usually more useful than "cannot check permissions".
+    pub fn check_trusted(&self, path: &Path) -> Result<()> {
+        if self.allow_unsafe_permissions || !path.exists() {
+            return Ok(());
+        }
+        check_not_group_or_world_writable(path)
+    }
+
     /// Load `config.toml`, or an empty configuration if it does not exist yet.
     ///
     /// A missing file is not an error: `keystone init` and `keystone bootstrap`
     /// both have to work on a machine that has never run Keystone.
     pub fn load_config(&self) -> Result<Config> {
         let path = self.paths.config_file();
-        // Checked before the read, not after: the point of the check is to refuse
-        // to act on content another user could have written, and parsing it first
-        // means the untrusted bytes have already been interpreted.
-        if !self.allow_unsafe_permissions && path.exists() {
-            check_not_group_or_world_writable(&path)?;
-        }
+        self.check_trusted(&path)?;
         match std::fs::read_to_string(&path) {
             Ok(text) => Config::parse(&text).map_err(|e| match e {
                 KeystoneError::InvalidConfiguration(message) => {
@@ -83,13 +92,11 @@ impl Store {
 
     pub fn load_identity(&self, key_id: &KeyId) -> Result<IdentityMetadata> {
         let path = self.paths.identity_file(key_id);
-        // This file names the Secure Enclave key to sign with and the public key
+        // This file names the hardware key to sign with and the public key
         // Keystone checks the certificate against, so a writable one is as
-        // dangerous as a writable config: see `enclave.rs`, where the fingerprint
-        // comparison is what makes owning the key storage safe.
-        if !self.allow_unsafe_permissions && path.exists() {
-            check_not_group_or_world_writable(&path)?;
-        }
+        // dangerous as a writable config: see the backend's `restore`, where the
+        // public-key comparison is what makes owning the key storage safe.
+        self.check_trusted(&path)?;
         let text = std::fs::read_to_string(&path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 KeystoneError::KeyUnavailable
@@ -170,14 +177,11 @@ impl Store {
     /// I/O error, because the actionable cause is an unfinished enrollment.
     pub fn load_certificates(&self, fingerprint: &Sha256Fingerprint) -> Result<(Vec<u8>, Vec<u8>)> {
         let dir = self.paths.certificate_dir(fingerprint);
-        let allow_unsafe = self.allow_unsafe_permissions;
         let read = |name: &str| -> Result<Vec<u8>> {
             let path = dir.join(name);
             // The certificates are public, but swapping one would change which
             // identity Keystone presents, so the write permission still matters.
-            if !allow_unsafe && path.exists() {
-                check_not_group_or_world_writable(&path)?;
-            }
+            self.check_trusted(&path)?;
             std::fs::read(&path).map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
                     KeystoneError::InvalidConfiguration(format!(
@@ -206,7 +210,7 @@ impl Store {
         }
     }
 
-    /// Remove an identity's metadata, which makes its Secure Enclave key unusable.
+    /// Remove an identity's metadata, which makes its hardware key unusable.
     pub fn delete_identity(&self, key_id: &KeyId) -> Result<()> {
         let path = self.paths.identity_file(key_id);
         match std::fs::remove_file(&path) {
@@ -225,10 +229,37 @@ impl Store {
 /// For directories Keystone owns. Applying this to a directory the user named on
 /// the command line would silently change who can read the rest of its contents,
 /// so [`write_atomic`] uses [`create_dir_all`] instead.
+///
+/// Every directory this call *creates* is tightened, not just the leaf. On a machine
+/// that has never run Keystone the first save creates the whole chain at once —
+/// `~/.local/share/keystone/identities`, say — and tightening only the last
+/// component would leave `keystone/` itself at the umask, so another local user could
+/// list which profiles exist. Directories that already existed are left alone: they
+/// are not Keystone's to re-permission, and the enclosing one may be a shared
+/// `~/.local/share`.
 pub fn create_dir_all_private(path: &Path) -> Result<()> {
+    // Recorded before creating anything, since after `create_dir_all` every
+    // component exists and there is no way to tell which ones are new.
+    let created: Vec<&Path> = path
+        .ancestors()
+        .take_while(|ancestor| !ancestor.as_os_str().is_empty() && !ancestor.exists())
+        .collect();
+
     std::fs::create_dir_all(path)
         .map_err(|e| KeystoneError::io(format!("cannot create {}", path.display()), e))?;
-    set_mode(path, DIR_MODE)
+
+    // Outermost first, so a failure partway leaves the outer directories already
+    // tightened rather than the inner ones. `ancestors` yields leaf-to-root.
+    for directory in created.iter().rev() {
+        set_mode(directory, DIR_MODE)?;
+    }
+    // `created` is empty when the whole path already existed, and the leaf's mode is
+    // then still Keystone's to assert: a directory it created on a previous run may
+    // have been loosened since.
+    if created.is_empty() {
+        set_mode(path, DIR_MODE)?;
+    }
+    Ok(())
 }
 
 /// Create a directory and its parents, leaving permissions to the umask.

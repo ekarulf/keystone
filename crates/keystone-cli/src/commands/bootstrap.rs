@@ -11,13 +11,18 @@
 //! 7. Verify the leaf public key matches the hardware key.
 //! 8. Persist only public certificate material.
 //! 9. Generate the CDK project.
-//! 10. Zeroize the CA private scalar.
+//! 10. Discard the CA private scalar.
 //! 11. Exit the short-lived bootstrap process.
 //!
 //! Steps 2 through 7 and 10 happen inside `keystone_pki::ephemeral_ca::issue`,
 //! which never returns the CA key; this module never sees it. Steps 6 and 7 run
 //! before anything is written, so a bootstrap that produced something Keystone
 //! would later reject leaves no state behind.
+//!
+//! The design writes step 10 as "zeroize", which `ephemeral_ca` cannot do: *ring*
+//! owns the scalar and exposes no way to overwrite it. The key is made
+//! unreachable and the process is short-lived, which is the mitigation actually in
+//! place. `EphemeralCaKey`'s documentation is the authority on the difference.
 
 use std::path::{Path, PathBuf};
 
@@ -300,15 +305,15 @@ mod tests {
         // then shows `assumed-role/KeystoneLaptop/1fb91081daf1...`, which is
         // exactly the identification the device name is collected to provide.
         assert_eq!(
-            default_role_session_name(None, "erik-macbook").as_deref(),
-            Some("erik-macbook")
+            default_role_session_name(None, "example-laptop").as_deref(),
+            Some("example-laptop")
         );
     }
 
     #[test]
     fn an_explicit_session_name_wins() {
         assert_eq!(
-            default_role_session_name(Some("build-agent"), "erik-macbook").as_deref(),
+            default_role_session_name(Some("build-agent"), "example-laptop").as_deref(),
             Some("build-agent")
         );
     }
@@ -318,7 +323,7 @@ mod tests {
         // A CN may contain spaces; a session name may not. Sending it would make
         // CreateSession fail for every refresh, which is far worse than falling
         // back to the name Roles Anywhere derives.
-        assert_eq!(default_role_session_name(None, "Erik's MacBook Pro"), None);
+        assert_eq!(default_role_session_name(None, "My Laptop Pro"), None);
         assert_eq!(default_role_session_name(None, "x"), None);
         assert_eq!(default_role_session_name(None, &"n".repeat(65)), None);
     }

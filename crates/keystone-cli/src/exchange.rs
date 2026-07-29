@@ -145,7 +145,8 @@ pub fn credentials_for(
             // still valid." An entry inside its refresh window is past the point
             // where Keystone prefers to refresh, but it is not expired.
             if use_cache {
-                if let Some(cached) = read_unexpired_cache(&cache_path, profile_name, &request, now)
+                if let Some(cached) =
+                    read_unexpired_cache(context, &cache_path, profile_name, &request, now)
                 {
                     context.note(format!(
                         "warning: could not refresh credentials ({error}); using cached \
@@ -293,7 +294,7 @@ fn read_fresh_cache(
     profile: &Profile,
     now: OffsetDateTime,
 ) -> Option<AwsSessionCredentials> {
-    let cached = load_cache(path)?;
+    let cached = load_cache(context, path)?;
     let role_arn = cached.role_arn.clone();
     let credentials = match cached.to_credentials(profile_name, &role_arn) {
         Ok(credentials) => credentials,
@@ -315,12 +316,13 @@ fn read_fresh_cache(
 
 /// Read the cache, accepting any entry that has not yet expired.
 fn read_unexpired_cache(
+    context: &Context,
     path: &Path,
     profile_name: &str,
     request: &CreateSessionRequest,
     now: OffsetDateTime,
 ) -> Option<AwsSessionCredentials> {
-    let cached = load_cache(path)?;
+    let cached = load_cache(context, path)?;
     let credentials = cached
         .to_credentials(profile_name, &request.role_arn)
         .ok()?;
@@ -330,7 +332,25 @@ fn read_unexpired_cache(
     Some(credentials)
 }
 
-fn load_cache(path: &Path) -> Option<CachedCredentials> {
+/// Read and parse a cache entry, or `None` for any reason it cannot be trusted.
+///
+/// The permission check matters more here than for the other files Keystone
+/// reads: those hold public material whose substitution `restore` and the
+/// certificate pairing would catch, whereas this file holds a live secret access
+/// key and session token. A cache another user can write is a cache another user
+/// can *plant*, which would hand the AWS SDK credentials of their choosing.
+///
+/// A failed check downgrades to "no cache" rather than an error, matching the
+/// rest of this function: an unreadable or corrupt entry means Keystone
+/// exchanges again, and refusing to produce credentials at all would be a worse
+/// outcome than ignoring the file. The reason is reported under `--verbose`, so
+/// the permission problem is still discoverable — and `keystone doctor` reports
+/// it unconditionally.
+fn load_cache(context: &Context, path: &Path) -> Option<CachedCredentials> {
+    if let Err(error) = context.store.check_trusted(path) {
+        context.detail(format!("ignoring the credential cache: {error}"));
+        return None;
+    }
     let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
 }
@@ -440,13 +460,13 @@ mod tests {
         // when that metadata is available".
         let requested = "arn:aws:iam::123456789012:role/KeystonePersonal";
         check_assumed_role(
-            "arn:aws:sts::123456789012:assumed-role/KeystonePersonal/erik-macbook",
+            "arn:aws:sts::123456789012:assumed-role/KeystonePersonal/example-laptop",
             requested,
         )
         .unwrap();
 
         let error = check_assumed_role(
-            "arn:aws:sts::123456789012:assumed-role/SomethingElse/erik-macbook",
+            "arn:aws:sts::123456789012:assumed-role/SomethingElse/example-laptop",
             requested,
         )
         .unwrap_err();
@@ -461,8 +481,8 @@ mod tests {
         // misconfiguration rather than a typo.
         let requested = "arn:aws:iam::123456789012:role/KeystonePersonal";
         for actual in [
-            "arn:aws:sts::123456789012:assumed-role/KeystonePersonalAdmin/erik-macbook",
-            "arn:aws:sts::123456789012:assumed-role/NotKeystonePersonal/erik-macbook",
+            "arn:aws:sts::123456789012:assumed-role/KeystonePersonalAdmin/example-laptop",
+            "arn:aws:sts::123456789012:assumed-role/NotKeystonePersonal/example-laptop",
             // The role name in the session-name position: the assumed role is
             // something else entirely, and only segment-wise parsing notices.
             "arn:aws:sts::123456789012:assumed-role/SomethingElse/KeystonePersonal",
@@ -496,7 +516,7 @@ mod tests {
         // IAM paths do not appear in the STS assumed-role ARN, so comparing the
         // full resource would reject a correct session.
         check_assumed_role(
-            "arn:aws:sts::123456789012:assumed-role/KeystonePersonal/erik-macbook",
+            "arn:aws:sts::123456789012:assumed-role/KeystonePersonal/example-laptop",
             "arn:aws:iam::123456789012:role/keystone/devices/KeystonePersonal",
         )
         .unwrap();

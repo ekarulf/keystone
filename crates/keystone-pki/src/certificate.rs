@@ -376,7 +376,7 @@ mod tests {
         let ca = TestCa::generate();
         let issued = ca.issue_device_certificate(
             &testing::random_device_key(),
-            "erik-macbook",
+            "example-laptop",
             &KeyId::generate(),
             time::macros::datetime!(2026-01-01 0:00 UTC),
             time::macros::datetime!(2027-01-01 0:00 UTC),
@@ -401,7 +401,7 @@ mod tests {
         let ca = TestCa::generate();
         let der = ca.issue_certificate_with_uri_san(
             &testing::random_device_key(),
-            "erik-macbook",
+            "example-laptop",
             Some("urn:example:other:1"),
         );
         let leaf = ParsedCertificate::from_der(&der).unwrap();

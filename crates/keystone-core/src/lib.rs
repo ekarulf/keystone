@@ -1,10 +1,11 @@
 //! Portable Keystone types: configuration, identity metadata, credentials,
 //! the private-key interface, and the error model.
 //!
-//! This crate is platform-independent on purpose. The Secure Enclave lives in
-//! `keystone-macos` behind the [`signer::KeystoneSigningIdentity`] trait, which
-//! keeps the security-critical surface small and lets the AWS protocol layer be
-//! tested with a software key.
+//! This crate is platform-independent on purpose. Each key store lives behind the
+//! [`signer::KeystoneSigningIdentity`] trait — the Secure Enclave in
+//! `keystone-macos`, the TPM in `keystone-windows` — which keeps the
+//! security-critical surface small and lets the AWS protocol layer be tested with
+//! a software key.
 
 pub mod config;
 pub mod credentials;

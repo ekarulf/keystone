@@ -148,7 +148,7 @@ impl PermissionMode {
             return Err(KeystoneError::InvalidConfiguration(format!(
                 "policy statement {offending} allows every action on every resource, which is \
                  AdministratorAccess written out. Keystone will not attach it to a device role: a \
-                 Secure Enclave identity refreshes credentials without user interaction, so this \
+                 hardware-backed identity refreshes credentials without user interaction, so this \
                  would be a standing grant. Narrow the policy, or attach it yourself after \
                  deployment."
             )));
@@ -179,7 +179,7 @@ impl PermissionMode {
                 .find(|f| name.eq_ignore_ascii_case(f))
             {
                 return Err(KeystoneError::InvalidConfiguration(format!(
-                    "Keystone will not attach {forbidden} to a device role: a Secure Enclave \
+                    "Keystone will not attach {forbidden} to a device role: a hardware-backed \
                      identity refreshes credentials without user interaction, so this would be a \
                      standing grant. Attach it yourself after deployment if that is what you want."
                 )));
@@ -773,7 +773,7 @@ mod tests {
 
         let error = CdkPlan::build(
             PlanRequest {
-                existing_role_arn: Some("arn:aws:iam::123456789012:user/erik".to_string()),
+                existing_role_arn: Some("arn:aws:iam::123456789012:user/example-user".to_string()),
                 ..request()
             },
             &profile(),

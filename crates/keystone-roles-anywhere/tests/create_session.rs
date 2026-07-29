@@ -1,8 +1,9 @@
 //! End-to-end `CreateSession` tests against a stub server.
 //!
-//! Phase 0 of the implementation plan: a software P-256 key and a test
-//! certificate exchanged for temporary credentials, exercising the real signing,
-//! transport, response parsing, and retry code paths.
+//! A software P-256 key and a test certificate exchanged for temporary
+//! credentials, exercising the real signing, transport, response parsing, and
+//! retry code paths. The hardware-backed counterpart lives in each platform
+//! crate's own `create_session` test, which drives this same stub server.
 
 use std::time::Duration;
 
@@ -47,7 +48,7 @@ const SUCCESS_BODY: &str = r#"{
   "credentialSet": [
     {
       "assumedRoleUser": {
-        "arn": "arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/erik-macbook"
+        "arn": "arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/example-laptop"
       },
       "credentials": {
         "accessKeyId": "ASIAEXAMPLE",
@@ -65,7 +66,7 @@ fn request() -> CreateSessionRequest {
         role_arn: "arn:aws:iam::123456789012:role/KeystonePersonalMac".to_string(),
         trust_anchor_arn: "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/t".to_string(),
         duration_seconds: 3600,
-        role_session_name: Some("erik-macbook".to_string()),
+        role_session_name: Some("example-laptop".to_string()),
     }
 }
 
@@ -103,7 +104,7 @@ fn a_signed_request_is_exchanged_for_temporary_credentials() {
     );
     assert_eq!(
         result.assumed_role_arn.as_deref(),
-        Some("arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/erik-macbook")
+        Some("arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/example-laptop")
     );
     assert!(result.credentials.validate(NOW).is_ok());
 }
@@ -132,7 +133,7 @@ fn the_request_on_the_wire_matches_what_aws_expects() {
 
     let body = sent.body_json();
     assert_eq!(body["durationSeconds"], 3600);
-    assert_eq!(body["roleSessionName"], "erik-macbook");
+    assert_eq!(body["roleSessionName"], "example-laptop");
     assert_eq!(
         body["roleArn"],
         "arn:aws:iam::123456789012:role/KeystonePersonalMac"

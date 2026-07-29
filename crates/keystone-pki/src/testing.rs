@@ -197,7 +197,7 @@ impl TestCa {
         key: &TestDeviceKey,
         key_id: &KeyId,
     ) -> Vec<u8> {
-        let mut params = base_params("erik-macbook");
+        let mut params = base_params("example-laptop");
         params.is_ca = rcgen::IsCa::ExplicitNoCa;
         // Present but wrong: key agreement instead of digital signature.
         params.key_usages = vec![rcgen::KeyUsagePurpose::KeyAgreement];
@@ -248,7 +248,7 @@ impl DeviceBundle {
 /// A fresh, valid device bundle: the usual starting point for a test.
 pub fn device_bundle() -> DeviceBundle {
     let key_id = KeyId::generate();
-    let device_name = "erik-macbook".to_string();
+    let device_name = "example-laptop".to_string();
     let device_key = TestDeviceKey::generate(key_id.clone());
     let ca = TestCa::with_key_id(&key_id);
     let leaf_der = ca.issue_device_certificate(

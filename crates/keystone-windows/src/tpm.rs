@@ -89,6 +89,12 @@ impl TpmIdentity {
     /// destroy the private key that an already-issued certificate names, turning a
     /// re-run of `keystone init` into silent, unrecoverable revocation of the
     /// device's identity.
+    ///
+    /// A failure *after* the key is created deletes it before returning. Unlike the
+    /// Secure Enclave, where an unpersisted key simply vanishes, a CNG key is
+    /// persisted the moment it is finalized: leaving it behind would make the very
+    /// next `generate` for the same key ID fail with "a TPM key of that name already
+    /// exists", pointing the user at a remedy for a problem they do not have.
     pub fn generate(
         key_id: KeyId,
         policy: TpmPolicy,
@@ -98,7 +104,32 @@ impl TpmIdentity {
 
         let name = key_name_for(&key_id);
         let key = backend::PlatformKey::create(&name)?;
-        let public_key_sec1 = key.public_key_sec1()?;
+
+        // From here on, every early return has to take the key with it. Written as a
+        // closure over `&key` rather than a `?` chain so there is one exit point to
+        // attach the cleanup to.
+        let checked = (|| -> Result<[u8; 65]> {
+            let public_key_sec1 = key.public_key_sec1()?;
+            self_test_with(&key, &public_key_sec1)?;
+            Ok(public_key_sec1)
+        })();
+
+        let public_key_sec1 = match checked {
+            Ok(public_key_sec1) => public_key_sec1,
+            Err(error) => {
+                // The original failure is what the user needs; a cleanup that also
+                // fails must not replace it. The key name is not logged, but it is
+                // derived from the key ID the error already names, so the note is
+                // enough to explain a later "already exists".
+                if key.delete().is_err() {
+                    return Err(KeystoneError::SecureEnclave(format!(
+                        "{error} (a partially created TPM key for {key_id} was also left behind \
+                         and could not be removed)"
+                    )));
+                }
+                return Err(error);
+            }
+        };
 
         let identity = Self {
             key_id: key_id.clone(),
@@ -106,7 +137,6 @@ impl TpmIdentity {
             accessibility: policy.accessibility(),
             key,
         };
-        identity.self_test()?;
 
         // The reference is the CNG name, not a key blob. Stored as its UTF-8 bytes
         // so the metadata field's base64 encoding means the same thing for both
@@ -151,13 +181,21 @@ impl TpmIdentity {
                 metadata.key_id
             ))
         })?;
-        // The name must be one Keystone issued. A metadata file naming some other
-        // application's TPM key would otherwise have Keystone open it, and — via
-        // `rotate` — delete it.
-        if !name.starts_with(KEY_NAME_PREFIX) {
+        // The name must be exactly the one this key ID derives to, not merely
+        // Keystone-prefixed. A prefix check would let an edited identity file point
+        // at *another* Keystone key — one belonging to a different profile on the
+        // same machine — which Keystone would then open and, via `rotate`, delete.
+        // The public-key comparison below would catch the substitution, but only
+        // after opening the wrong key, and the error would read as a corrupt
+        // identity rather than as a file that has been tampered with.
+        //
+        // Deriving the name and comparing also means the reference carries no
+        // authority of its own: it is stored, and checked, but never trusted.
+        let expected_name = key_name_for(&metadata.key_id);
+        if name != expected_name {
             return Err(KeystoneError::InvalidConfiguration(format!(
-                "identity {} names TPM key {name:?}, which is not a Keystone key; Keystone only \
-                 uses keys named {KEY_NAME_PREFIX}*",
+                "identity {} names TPM key {name:?}, but its key ID derives to \
+                 {expected_name:?}; the identity file may have been edited",
                 metadata.key_id
             )));
         }
@@ -187,18 +225,7 @@ impl TpmIdentity {
     /// The signature is checked against the cached public key, which catches a
     /// raw-to-DER conversion fault as well as a broken key.
     pub fn self_test(&self) -> Result<()> {
-        let signature = self.sign_message_ecdsa_sha256(SELF_TEST_MESSAGE)?;
-        keystone_pki::verify_der_signature(
-            &self.public_key_sec1,
-            SELF_TEST_MESSAGE,
-            signature.as_bytes(),
-        )
-        .map_err(|_| {
-            KeystoneError::SecureEnclave(
-                "the TPM produced a signature that does not verify against its own public key"
-                    .to_string(),
-            )
-        })
+        self_test_with(&self.key, &self.public_key_sec1)
     }
 
     /// The SHA-256 fingerprint of the public key, safe to log.
@@ -213,14 +240,46 @@ impl TpmIdentity {
         self.accessibility
     }
 
-    /// Delete the underlying TPM key.
+    /// Delete the underlying TPM key. Unrecoverable.
     ///
-    /// Used by `keystone rotate` after the replacement identity is in place. The
-    /// private key is unrecoverable afterwards, so the caller is responsible for
-    /// ordering this after the new key works.
+    /// Called by [`generate`](Self::generate) to clean up a key whose self-test
+    /// failed, and by this crate's hardware tests, which must not leave keys in a
+    /// TPM with finite storage. No Keystone *command* calls it, and that is
+    /// deliberate rather than an oversight: the design makes deleting the old local
+    /// key reference the operator's step 10, after the rollback window, and the
+    /// Secure Enclave backend has no counterpart to call — a CryptoKit key becomes
+    /// unusable when its blob is deleted, so removing the identity file is the whole
+    /// operation there. Wiring this into `rotate` would make the two backends behave
+    /// differently at the same command.
+    ///
+    /// The asymmetry is real and worth knowing: on Windows, removing the identity
+    /// file leaves the key itself in the TPM, occupying a slot, reachable only by the
+    /// name that file recorded. `rotate --activate` says so when it prints the
+    /// cleanup commands.
     pub fn delete_key(self) -> Result<()> {
         self.key.delete()
     }
+}
+
+/// Sign and verify the probe against a key that may not yet have an identity.
+///
+/// Split out of [`TpmIdentity::self_test`] so [`TpmIdentity::generate`] can run the
+/// probe while it still owns the bare key and can delete it on failure. Hashing
+/// duplicates [`KeystoneSigningIdentity::sign_message_ecdsa_sha256`] deliberately:
+/// the probe must exercise the same digest-then-sign path a real request takes, and
+/// routing it through a half-built identity to get there would be the more fragile
+/// arrangement.
+fn self_test_with(key: &backend::PlatformKey, public_key_sec1: &[u8; 65]) -> Result<()> {
+    use sha2::{Digest as _, Sha256};
+    let digest: [u8; 32] = Sha256::digest(SELF_TEST_MESSAGE).into();
+    let signature = keystone_pki::raw_to_der(&key.sign_prehashed(&digest)?)?;
+    keystone_pki::verify_der_signature(public_key_sec1, SELF_TEST_MESSAGE, signature.as_bytes())
+        .map_err(|_| {
+            KeystoneError::SecureEnclave(
+                "the TPM produced a signature that does not verify against its own public key"
+                    .to_string(),
+            )
+        })
 }
 
 impl KeystoneSigningIdentity for TpmIdentity {
@@ -291,27 +350,62 @@ mod backend {
     //! The real CNG-backed implementation.
 
     use keystone_core::error::{KeystoneError, Result};
-    use keystone_win32_sys::cng::{self, Provider, TpmKey, NTE_BAD_KEYSET, NTE_EXISTS};
+    use keystone_win32_sys::cng::{
+        self, means_no_tpm, Provider, TpmKey, NTE_BAD_KEYSET, NTE_EXISTS,
+    };
     use keystone_win32_sys::Win32Error;
 
     use crate::access::TpmReport;
 
     /// Translate a Win32 failure into Keystone's error model.
     ///
-    /// The two statuses that have a specific meaning to a user are mapped to
-    /// specific variants; everything else keeps the raw status, because a
-    /// `SECURITY_STATUS` is the only thing that makes an unfamiliar CNG failure
-    /// searchable.
+    /// Statuses with a specific meaning to a user get a specific variant; everything
+    /// else keeps the raw status, because a `SECURITY_STATUS` is the only thing that
+    /// makes an unfamiliar CNG failure searchable.
+    ///
+    /// The two special cases are the ones a user can act on. A missing key is
+    /// `KeyUnavailable`, which reads as "enroll first" rather than as a TPM fault. A
+    /// machine with no usable TPM is `SecureEnclaveUnavailable`, the same variant the
+    /// availability probe produces — without this, a TPM disabled in firmware between
+    /// enrollment and a later refresh would surface as a raw hex status instead of the
+    /// one message that tells the user to check firmware.
+    ///
+    /// [`NTE_BAD_KEYSET`] is ambiguous — it means both "no such key" and "no TPM
+    /// container" — so it is resolved by *which call* failed rather than by the status
+    /// alone. A failure to open the provider goes through [`map_provider`], where it
+    /// means no TPM; a failure on a key operation comes here, where the provider has
+    /// already opened and the key is therefore what is missing.
     fn map(error: Win32Error, context: &str) -> KeystoneError {
         match error.code {
             NTE_BAD_KEYSET => KeystoneError::KeyUnavailable,
+            code if means_no_tpm(code) => KeystoneError::SecureEnclaveUnavailable,
             _ => KeystoneError::SecureEnclave(format!("{context}: {error}")),
         }
     }
 
+    /// Translate a failure to open the Platform Crypto Provider.
+    ///
+    /// Separate from [`map`] only to resolve [`NTE_BAD_KEYSET`] the other way: here
+    /// there is no key yet to be missing, so every no-TPM status means the machine
+    /// cannot do this at all.
+    fn map_provider(error: Win32Error) -> KeystoneError {
+        if means_no_tpm(error.code) {
+            KeystoneError::SecureEnclaveUnavailable
+        } else {
+            KeystoneError::SecureEnclave(format!(
+                "cannot open the TPM key storage provider: {error}"
+            ))
+        }
+    }
+
     pub fn is_available() -> Result<bool> {
-        cng::platform_provider_available()
-            .map_err(|error| map(error, "cannot query the TPM key storage provider"))
+        // `platform_provider_available` has already turned every no-TPM status into
+        // `Ok(false)`, so anything reaching here is a genuine failure to query.
+        cng::platform_provider_available().map_err(|error| {
+            KeystoneError::SecureEnclave(format!(
+                "cannot query the TPM key storage provider: {error}"
+            ))
+        })
     }
 
     pub fn report() -> TpmReport {
@@ -352,8 +446,7 @@ mod backend {
 
     impl PlatformKey {
         pub fn create(name: &str) -> Result<Self> {
-            let provider = Provider::open_platform()
-                .map_err(|error| map(error, "cannot open the TPM key storage provider"))?;
+            let provider = Provider::open_platform().map_err(map_provider)?;
             let key = TpmKey::create(&provider, name).map_err(|error| {
                 if error.code == NTE_EXISTS {
                     // Not mapped through `map`: this is a configuration problem
@@ -374,8 +467,7 @@ mod backend {
         }
 
         pub fn open(name: &str) -> Result<Self> {
-            let provider = Provider::open_platform()
-                .map_err(|error| map(error, "cannot open the TPM key storage provider"))?;
+            let provider = Provider::open_platform().map_err(map_provider)?;
             let key = TpmKey::open(&provider, name)
                 .map_err(|error| map(error, "cannot open the TPM key"))?;
             Ok(Self {

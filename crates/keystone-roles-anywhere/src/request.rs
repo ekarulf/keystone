@@ -267,7 +267,7 @@ mod tests {
             trust_anchor_arn: "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/t"
                 .to_string(),
             duration_seconds: 3600,
-            role_session_name: Some("erik-macbook".to_string()),
+            role_session_name: Some("example-laptop".to_string()),
         }
     }
 
@@ -302,7 +302,7 @@ mod tests {
             parsed["roleArn"],
             "arn:aws:iam::123456789012:role/KeystonePersonalMac"
         );
-        assert_eq!(parsed["roleSessionName"], "erik-macbook");
+        assert_eq!(parsed["roleSessionName"], "example-laptop");
         assert!(parsed["profileArn"].is_string());
         assert!(parsed["trustAnchorArn"].is_string());
     }
@@ -315,7 +315,7 @@ mod tests {
         let body = request().serialize_body().unwrap();
         let text = String::from_utf8(body).unwrap();
         assert!(
-            text.contains(r#""roleSessionName":"erik-macbook""#),
+            text.contains(r#""roleSessionName":"example-laptop""#),
             "{text}"
         );
         assert!(

@@ -12,6 +12,12 @@ Sections written as future work are marked where they are still future work. The
 Implementation Plan at the end describes phases that have all shipped and is kept
 as a record of the intended order.
 
+Where the implementation deliberately falls short of a requirement here, this
+document says so at that requirement rather than quietly restating the goal. Those
+notes are labelled **Implementation deviation** or **Implementation note**; there
+are three, on CA private-key zeroization, retry timestamps, and the clock-skew
+remediation text.
+
 ## Summary
 
 Keystone is a standalone credential helper that exchanges a hardware-backed device identity for temporary AWS credentials through AWS IAM Roles Anywhere.
@@ -57,7 +63,7 @@ Keystone avoids:
 
 Keystone should provide:
 
-* Secure Enclave-backed P-256 identity generation;
+* hardware-backed P-256 identity generation — Secure Enclave on macOS, TPM on Windows;
 * unattended P-256 signing after first device unlock;
 * X.509 certificate generation and installation;
 * an optional one-shot external CA;
@@ -266,7 +272,8 @@ keystone/
 │   ├── keystone-pki/
 │   ├── keystone-roles-anywhere/
 │   ├── keystone-infra/
-│   └── keystone-cli/
+│   ├── keystone-cli/
+│   └── keystone-tests/
 ├── templates/
 │   └── cdk-typescript-v1/
 ├── tests/
@@ -275,6 +282,11 @@ keystone/
 │   └── integration/
 └── docs/
 ```
+
+`keystone-tests` is not in the list above but exists in the implementation: the
+suites under `tests/` are integration tests, which Cargo will only run from a
+package, so `keystone-tests` is the package whose `[[test]]` targets point at
+them. It ships no library code.
 
 ## `keystone-core`
 
@@ -443,6 +455,45 @@ keystone infra cdk render
 keystone infra cdk sync-profile
 ```
 
+## Global options
+
+Accepted by every subcommand:
+
+```text
+--home <DIR>                  Override Keystone's data directory. Also read from
+                              the KEYSTONE_HOME environment variable, which the
+                              flag overrides. Intended for tests and for keeping
+                              more than one independent Keystone tree on a
+                              machine.
+--allow-unsafe-permissions    Read configuration, identity, certificate, and
+                              credential-cache files even when another local user
+                              can write them. Refused by default; see
+                              File permissions. Relaxes only the permission
+                              check, never any content validation.
+-v, --verbose                 Print more diagnostic detail on standard error.
+                              Never changes what goes to standard output, so it
+                              is safe under credential-process.
+```
+
+## Per-command options worth naming here
+
+Beyond the flags the command sections below describe:
+
+```text
+credential-process --no-cache    Ignore the cache and perform a fresh exchange.
+credential-process --redact      On by default; --redact false is the deliberate
+test --redact                    step that unredacts --debug-signing output.
+rotate --activate                Switch the profile to the new identity now.
+                                 Without it, rotate prepares the identity and
+                                 stops before the switch, so the new trust anchor
+                                 can be deployed and tested first. This is what
+                                 makes the safe sequence in Rotation safe.
+infra cdk render --file <PATH>   Which generated file to print, e.g.
+                                 lib/keystone-personal-stack.ts. Required:
+                                 `render` prints one file, where `print` shows
+                                 the plan.
+```
+
 ---
 
 # Configuration
@@ -465,7 +516,7 @@ trust_anchor_arn = "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/..
 roles_anywhere_profile_arn = "arn:aws:rolesanywhere:us-east-1:123456789012:profile/..."
 role_arn = "arn:aws:iam::123456789012:role/KeystonePersonalMac"
 
-role_session_name = "erik-macbook"
+role_session_name = "example-laptop"
 duration_seconds = 3600
 
 key_id = "019c..."
@@ -723,9 +774,9 @@ Keystone can generate a PKCS#10 CSR for an existing CA.
 ```bash
 keystone enroll csr \
     --profile personal \
-    --subject "CN=erik-macbook,OU=Keystone Devices,O=Karulf" \
+    --subject "CN=example-laptop,OU=Keystone Devices,O=Example" \
     --san-uri "urn:keystone:device:019c..." \
-    --output erik-macbook.csr
+    --output example-laptop.csr
 ```
 
 Flow:
@@ -805,7 +856,7 @@ Persistent:
 keystone bootstrap \
     --profile personal \
     --ca-mode ephemeral \
-    --device-name erik-macbook \
+    --device-name example-laptop \
     --leaf-validity 5y \
     --ca-validity 10y \
     --generate-cdk ./keystone-infra
@@ -899,6 +950,8 @@ short-lived bootstrap worker
 ```
 
 Perfect deletion from process memory cannot be proven on a general-purpose OS, but a short-lived process and explicit zeroization significantly reduce persistence.
+
+**Implementation deviation.** Steps 10 and the "zeroizes private scalar" box above are *not* implemented as written. `keystone-pki` generates the CA key as an `rcgen::KeyPair`, which holds the private scalar inside *ring* and exposes no way to overwrite it; rcgen's internal PKCS#8 buffer is not reachable either. What the implementation does provide is unreachability — no accessor, no serialization path, and the key dropped before `issue` returns — plus the short-lived process this section calls for. The residual exposure is a core dump, an attached debugger, or swapped-out pages during the seconds a bootstrap runs. Closing it properly requires a zeroize-aware P-256 key type rather than a `Drop` impl that cannot reach the bytes. See `EphemeralCaKey` in `crates/keystone-pki/src/ephemeral_ca.rs`, which documents the same split.
 
 ## Output
 
@@ -1010,7 +1063,7 @@ keystone rotate \
 
 Safe sequence:
 
-1. Generate a new Secure Enclave key.
+1. Generate a new hardware key.
 2. Generate a new ephemeral CA.
 3. Issue a new device certificate.
 4. Deploy a second trust anchor.
@@ -1114,7 +1167,7 @@ Conceptually:
   "roleArn": "arn:aws:iam::123456789012:role/KeystonePersonalMac",
   "trustAnchorArn": "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/...",
   "durationSeconds": 3600,
-  "roleSessionName": "erik-macbook"
+  "roleSessionName": "example-laptop"
 }
 ```
 
@@ -1424,9 +1477,16 @@ Example:
 ```text
 IAM Roles Anywhere rejected the signature timestamp.
 
-Check macOS System Settings > General > Date & Time and confirm that
-automatic time synchronization is enabled.
+Confirm that automatic time synchronization is enabled: on macOS, System
+Settings > General > Date & Time; on Windows, Settings > Time & language >
+Date & time.
 ```
+
+The implementation does not emit this text. `keystone-core`'s local clock check
+returns `KeystoneError::ClockSkew` ("system clock may be incorrect"), and a
+skew rejection *from AWS* surfaces as `RolesAnywhereRejected` with the service's
+own code. `keystone doctor`'s "local clock" check is where a user is pointed at
+the clock; the per-platform remediation above is not yet written anywhere.
 
 ---
 
@@ -1479,6 +1539,8 @@ invalid profile
 
 Each retry should build and sign a fresh request with a current timestamp.
 
+**Implementation note.** Each retry does build and sign a fresh request, but the timestamp comes from the client's injected clock, and the CLI injects a fixed one — the single timestamp the command validated, per "capture one timestamp per signing attempt; use that timestamp consistently" above. The two requirements only coexist because the full retry sequence completes in under a second, so a fixed timestamp cannot drift into AWS's skew window. A retry policy with minutes of backoff would have to take a system clock instead.
+
 ---
 
 # `keystone inspect`
@@ -1491,12 +1553,12 @@ Example output:
 
 ```text
 Profile: personal
-Key backend: macOS Secure Enclave
+Key backend: Secure Enclave
 Key algorithm: P-256 ECDSA
 Key ID: 019c...
 Public-key fingerprint: SHA256:7f2c...
 
-Certificate subject: CN=erik-macbook
+Certificate subject: CN=example-laptop
 Certificate issuer: CN=Keystone Ephemeral CA 019c...
 Certificate serial: 4837201
 Certificate expires: 2031-07-25T00:00:00Z
@@ -1537,7 +1599,7 @@ Example:
 IAM Roles Anywhere authentication succeeded.
 
 Caller ARN:
-arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/erik-macbook
+arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/example-laptop
 
 Credentials expire:
 2026-07-26T01:15:00Z
@@ -1549,7 +1611,7 @@ Credentials expire:
 
 Checks:
 
-* Secure Enclave availability;
+* key-store availability (Secure Enclave or TPM);
 * key restoration;
 * unattended signing;
 * configuration permissions;
@@ -2300,9 +2362,11 @@ Against a dedicated account:
 
 # Implementation Plan
 
-All phases below have shipped. Kept as a record of the intended order, which the
-code comments still cross-reference; the phase numbering is this document's own,
-not an external tracker's.
+All phases below have shipped. Kept as a record of the intended order; the phase
+numbering is this document's own, not an external tracker's, and the code no
+longer refers to it — a comment that says "the Phase 1 deliverable" tells a reader
+nothing once every phase is done, so those comments now name what they actually
+guard.
 
 ## Phase 0: AWS protocol spike
 
@@ -2448,7 +2512,7 @@ The MVP must not:
 keystone bootstrap \
     --profile personal \
     --ca-mode ephemeral \
-    --device-name erik-macbook \
+    --device-name example-laptop \
     --leaf-validity 5y \
     --ca-validity 10y \
     --generate-cdk ./keystone-infra
@@ -2505,9 +2569,9 @@ AWS_PROFILE=keystone-personal \
 
 ## Keystone is standalone
 
-Keystone is not tied to any particular system and can be used by any macOS application or developer workflow.
+Keystone is not tied to any particular system and can be used by any application or developer workflow.
 
-## Secure Enclave identity
+## Hardware-backed identity
 
 The long-lived private key is device-bound and non-exportable.
 
@@ -2545,4 +2609,4 @@ Keystone emits auditable infrastructure source and leaves deployment under expli
 
 ## No silent fallback
 
-If Secure Enclave signing fails, Keystone fails closed.
+If hardware signing fails, Keystone fails closed.

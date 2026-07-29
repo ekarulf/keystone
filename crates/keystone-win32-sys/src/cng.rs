@@ -13,10 +13,12 @@
 //!   is exporting the private key.
 //! * `NCRYPT_KEY_USAGE_PROPERTY` is `NCRYPT_ALLOW_SIGNING_FLAG` alone, so the key
 //!   cannot be repurposed for decryption or key agreement.
-//! * `NCRYPT_SILENT_FLAG` is passed to every call that accepts it, which suppresses
-//!   any provider UI. This is the Windows form of "must not silently add biometric
-//!   or user-presence requirements": a key that would prompt fails the call instead
-//!   of raising a dialog during an unattended credential refresh.
+//! * `NCRYPT_SILENT_FLAG` is passed to every call that documents it, which
+//!   suppresses any provider UI. This is the Windows form of "must not silently add
+//!   biometric or user-presence requirements": a key that would prompt fails the
+//!   call instead of raising a dialog during an unattended credential refresh.
+//!   `NCryptCreatePersistedKey` is the exception, and does not accept it — see the
+//!   comment at that call.
 //!
 //! Keys are *persisted* under a name derived from Keystone's key ID rather than
 //! created ephemerally, because a TPM key handle does not survive the process and
@@ -35,12 +37,39 @@ use windows_sys::Win32::Security::Cryptography::{
 
 use crate::{wide, Result, Win32Error};
 
-/// `NTE_BAD_KEYSET`: the named key does not exist.
-pub const NTE_BAD_KEYSET: i32 = -2146893802;
-/// `NTE_EXISTS`: a key of that name is already present.
-pub const NTE_EXISTS: i32 = -2146893809;
-/// `NTE_NOT_SUPPORTED`: the provider cannot do this — no TPM, in practice.
-pub const NTE_NOT_SUPPORTED: i32 = -2146893783;
+// The status values are re-exported from `windows-sys` rather than written out as
+// decimals. A `SECURITY_STATUS` typo is a bug that only appears on real hardware,
+// as an error taking the wrong branch, and nothing on a development machine would
+// catch it.
+
+/// `NTE_BAD_KEYSET` (0x80090016): the named key does not exist. Also what opening
+/// the Platform Crypto Provider returns on a machine whose TPM is absent or not
+/// owned, since the provider's key container itself is then missing.
+pub use windows_sys::Win32::Foundation::NTE_BAD_KEYSET;
+/// `NTE_DEVICE_NOT_READY` (0x80090030): the TPM is present but not usable —
+/// disabled in firmware, not yet provisioned, or in a failed state.
+pub use windows_sys::Win32::Foundation::NTE_DEVICE_NOT_READY;
+/// `NTE_EXISTS` (0x8009000F): a key of that name is already present.
+pub use windows_sys::Win32::Foundation::NTE_EXISTS;
+/// `NTE_INVALID_PARAMETER` (0x80090027): used here to report that a blob CNG
+/// returned is not the shape this crate requires. Distinct from
+/// [`NTE_NOT_SUPPORTED`], which means the provider refused the operation.
+pub use windows_sys::Win32::Foundation::NTE_INVALID_PARAMETER;
+/// `NTE_NOT_SUPPORTED` (0x80090029): the provider cannot do what was asked.
+pub use windows_sys::Win32::Foundation::NTE_NOT_SUPPORTED;
+
+/// Whether a CNG status means "this machine has no usable TPM".
+///
+/// Shared so the availability probe and the backend's error mapping cannot drift
+/// apart: a status one treats as "no TPM" and the other treats as a hard failure
+/// produces a `doctor` that reports healthy and a `bootstrap` that fails, or the
+/// reverse.
+pub fn means_no_tpm(code: i32) -> bool {
+    matches!(
+        code,
+        NTE_NOT_SUPPORTED | NTE_BAD_KEYSET | NTE_DEVICE_NOT_READY
+    )
+}
 
 /// An open handle to the Platform Crypto Provider.
 ///
@@ -107,6 +136,17 @@ impl TpmKey {
     pub fn create(provider: &Provider, name: &str) -> Result<Self> {
         let name_w = wide(name);
         let mut handle: NCRYPT_KEY_HANDLE = 0;
+        // The final flags argument is `0`, not `NCRYPT_SILENT_FLAG`. This call's
+        // documented flags are the machine-key and overwrite flags; silent is not
+        // among them, and CNG rejects undocumented flags on some providers. There is
+        // nothing to suppress here in any case — no UI can appear before the key
+        // exists. Silence is enforced where it can be: on `NCryptFinalizeKey`, which
+        // is where the TPM is actually engaged, and on every operation afterwards.
+        //
+        // Neither is `NCRYPT_OVERWRITE_KEY_FLAG` passed: an existing name must come
+        // back as `NTE_EXISTS` for the caller to decide about, never be replaced,
+        // since overwriting would destroy the private key a live certificate names.
+        //
         // SAFETY: `provider` is a live handle, `name_w` is NUL-terminated and
         // outlives the call, and `handle` is a valid out-pointer. `0` for
         // `dwLegacyKeySpec` is required for a CNG-only key.
@@ -118,7 +158,7 @@ impl TpmKey {
                 BCRYPT_ECDSA_P256_ALGORITHM,
                 name_w.as_ptr(),
                 0,
-                NCRYPT_SILENT_FLAG,
+                0,
             )
         };
         if status != 0 {
@@ -236,8 +276,13 @@ impl TpmKey {
         }
         buffer.truncate(written as usize);
 
+        // The three checks below report `NTE_INVALID_PARAMETER`, not
+        // `NTE_NOT_SUPPORTED`: the provider answered successfully and the blob it
+        // returned is wrong. Reusing the no-TPM status here would make a malformed
+        // export indistinguishable from a machine without a TPM, and `doctor` would
+        // report "no TPM" on a machine that has one.
         if buffer.len() < header {
-            return Err(Win32Error::new("NCryptExportKey", NTE_NOT_SUPPORTED));
+            return Err(Win32Error::new("NCryptExportKey", NTE_INVALID_PARAMETER));
         }
         // Read the two header fields without transmuting: the blob is a byte
         // buffer from a foreign API, and `from_ne_bytes` on a copied slice needs
@@ -245,13 +290,13 @@ impl TpmKey {
         let magic = u32::from_ne_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]);
         let cb_key = u32::from_ne_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]) as usize;
         if magic != BCRYPT_ECDSA_PUBLIC_P256_MAGIC || cb_key != 32 {
-            // Not a P-256 public key. Reported as unsupported rather than parsed,
-            // because reinterpreting another curve's coordinates as P-256 would
-            // produce a plausible-looking key that cannot verify.
-            return Err(Win32Error::new("NCryptExportKey", NTE_NOT_SUPPORTED));
+            // Not a P-256 public key. Rejected rather than parsed, because
+            // reinterpreting another curve's coordinates as P-256 would produce a
+            // plausible-looking key that cannot verify.
+            return Err(Win32Error::new("NCryptExportKey", NTE_INVALID_PARAMETER));
         }
         if buffer.len() < header + 64 {
-            return Err(Win32Error::new("NCryptExportKey", NTE_NOT_SUPPORTED));
+            return Err(Win32Error::new("NCryptExportKey", NTE_INVALID_PARAMETER));
         }
 
         let mut sec1 = [0u8; 65];
@@ -319,7 +364,7 @@ impl TpmKey {
         let raw: [u8; 64] = signature
             .as_slice()
             .try_into()
-            .map_err(|_| Win32Error::new("NCryptSignHash", NTE_NOT_SUPPORTED))?;
+            .map_err(|_| Win32Error::new("NCryptSignHash", NTE_INVALID_PARAMETER))?;
         Ok(raw)
     }
 
@@ -361,7 +406,7 @@ impl Drop for TpmKey {
 pub fn platform_provider_available() -> std::result::Result<bool, Win32Error> {
     match Provider::open_platform() {
         Ok(_) => Ok(true),
-        Err(error) if error.code == NTE_NOT_SUPPORTED || error.code == NTE_BAD_KEYSET => Ok(false),
+        Err(error) if means_no_tpm(error.code) => Ok(false),
         Err(error) => Err(error),
     }
 }

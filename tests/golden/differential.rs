@@ -218,7 +218,7 @@ fn request() -> CreateSessionRequest {
         trust_anchor_arn: "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/differential"
             .to_string(),
         duration_seconds: 3600,
-        role_session_name: Some("erik-macbook".to_string()),
+        role_session_name: Some("example-laptop".to_string()),
     }
 }
 
@@ -277,7 +277,7 @@ fn the_request_bodies_agree() {
     assert_eq!(parsed["durationSeconds"], 3600);
     assert_eq!(parsed["profileArn"], request().profile_arn);
     assert_eq!(parsed["roleArn"], request().role_arn);
-    assert_eq!(parsed["roleSessionName"], "erik-macbook");
+    assert_eq!(parsed["roleSessionName"], "example-laptop");
     assert_eq!(parsed["trustAnchorArn"], request().trust_anchor_arn);
     assert_eq!(
         parsed.as_object().expect("an object").len(),

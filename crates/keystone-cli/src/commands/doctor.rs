@@ -1,7 +1,8 @@
 //! `keystone doctor` — run every check and report what is wrong.
 //!
 //! The design's list, in order: key-store availability, key restoration,
-//! unattended signing, configuration permissions, certificate parsing,
+//! unattended signing, configuration and credential-cache permissions,
+//! certificate parsing,
 //! certificate validity, certificate/key match, CA chain validation, URI SAN
 //! presence, endpoint reachability, local clock, Roles Anywhere authentication,
 //! AWS shared-config integration, certificate expiration, trust-anchor
@@ -90,6 +91,25 @@ impl Report {
             .filter(|(_, outcome)| matches!(outcome, Outcome::Warn(_)))
             .count()
     }
+
+    /// Checks that were not attempted.
+    ///
+    /// Counted separately so the summary cannot report them as passes. A run with
+    /// no certificate installed skips five checks; calling those "passed" would tell
+    /// a user their certificate is fine when Keystone never looked at one.
+    fn skips(&self) -> usize {
+        self.checks
+            .iter()
+            .filter(|(_, outcome)| matches!(outcome, Outcome::Skip(_)))
+            .count()
+    }
+
+    fn passes(&self) -> usize {
+        self.checks
+            .iter()
+            .filter(|(_, outcome)| matches!(outcome, Outcome::Pass(_)))
+            .count()
+    }
 }
 
 pub fn run(context: &Context, args: &ProfileArgs) -> Result<()> {
@@ -128,19 +148,7 @@ pub fn run(context: &Context, args: &ProfileArgs) -> Result<()> {
         },
     );
 
-    let config_path = context.store.paths().config_file();
-    if config_path.exists() {
-        report.check(
-            "configuration permissions",
-            format!("{} is not writable by other users", config_path.display()),
-            keystone_core::config::check_not_group_or_world_writable(&config_path),
-        );
-    } else {
-        report.add(
-            "configuration permissions",
-            Outcome::Skip(format!("{} does not exist yet", config_path.display())),
-        );
-    }
+    check_permissions(context, &mut report, &args.profile);
 
     let profile = match context.load_profile(&args.profile) {
         Ok(profile) => {
@@ -158,7 +166,7 @@ pub fn run(context: &Context, args: &ProfileArgs) -> Result<()> {
 
     if let (Some(profile), Some(now)) = (&profile, now) {
         let loaded = check_identity(context, &mut report, &args.profile, profile, now);
-        check_trust_anchor(&mut report, profile);
+        check_trust_anchor(&mut report, &args.profile, profile);
         check_endpoint(&mut report, profile);
         check_shared_config(&mut report, &args.profile);
         check_authentication(
@@ -201,10 +209,19 @@ pub fn run(context: &Context, args: &ProfileArgs) -> Result<()> {
 
     let failures = report.failures();
     let warnings = report.warnings();
+    let skips = report.skips();
     if failures == 0 {
+        // Passes are counted, not derived by subtraction: a skip is not a pass, and
+        // reporting "15 check(s) passed" for a run that never looked at a
+        // certificate is the kind of false reassurance `doctor` exists to prevent.
+        let not_run = if skips > 0 {
+            format!(", {skips} not run")
+        } else {
+            String::new()
+        };
         print_line(&format!(
-            "{} check(s) passed, {warnings} warning(s).",
-            report.checks.len() - warnings
+            "{} check(s) passed, {warnings} warning(s){not_run}.",
+            report.passes()
         ))?;
         return Ok(());
     }
@@ -214,6 +231,42 @@ pub fn run(context: &Context, args: &ProfileArgs) -> Result<()> {
         "keystone doctor found {failures} problem(s) with profile {:?}",
         args.profile
     )))
+}
+
+/// Report on the files whose write permissions Keystone relies on.
+///
+/// Deliberately calls [`keystone_core::config::check_not_group_or_world_writable`]
+/// directly rather than `Store::check_trusted`, so `--allow-unsafe-permissions`
+/// cannot silence it. Every other command has to decide whether to *act* on a
+/// file, which the override is for; `doctor` only reports, and a user who asked
+/// for the override still needs to be told what it is overriding.
+fn check_permissions(context: &Context, report: &mut Report, profile_name: &str) {
+    // The cache is listed second but is the more sensitive of the two: it holds a
+    // live secret access key and session token, whereas a tampered config would
+    // still have to get past certificate pairing.
+    for (name, path) in [
+        (
+            "configuration permissions",
+            context.store.paths().config_file(),
+        ),
+        (
+            "credential cache permissions",
+            context.store.paths().credential_cache_file(profile_name),
+        ),
+    ] {
+        if path.exists() {
+            report.check(
+                name,
+                format!("{} is not writable by other users", path.display()),
+                keystone_core::config::check_not_group_or_world_writable(&path),
+            );
+        } else {
+            report.add(
+                name,
+                Outcome::Skip(format!("{} does not exist yet", path.display())),
+            );
+        }
+    }
 }
 
 /// Key restoration, unattended signing, and every certificate check.
@@ -396,8 +449,8 @@ fn check_identity(
     loaded.ok()
 }
 
-fn check_trust_anchor(report: &mut Report, profile: &Profile) {
-    match profile.require_ready("") {
+fn check_trust_anchor(report: &mut Report, profile_name: &str, profile: &Profile) {
+    match profile.require_ready(profile_name) {
         Ok(_) => {
             report.add(
                 "trust-anchor configuration",
@@ -405,16 +458,17 @@ fn check_trust_anchor(report: &mut Report, profile: &Profile) {
             );
         }
         Err(_) => {
-            // `require_ready`'s message names `sync-profile`, which is exactly the
-            // advice here, but it is phrased for a profile name this check does
-            // not have.
+            // Phrased here rather than reusing `require_ready`'s message, which is
+            // written for a caller that was about to sign. The command must be
+            // copy-pastable: `sync-profile` requires `--outputs`, and printing it
+            // without one hands the user a command that fails.
             report.add(
                 "trust-anchor configuration",
-                Outcome::Fail(
+                Outcome::Fail(format!(
                     "the profile is missing an ARN. Deploy the generated stack, then run \
-                     `keystone infra cdk sync-profile`."
-                        .to_string(),
-                ),
+                     `keystone infra cdk sync-profile --profile {profile_name} --outputs \
+                     ./keystone-infra/cdk-outputs.json`."
+                )),
             );
         }
     }

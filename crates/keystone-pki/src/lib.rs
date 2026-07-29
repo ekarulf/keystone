@@ -2,8 +2,8 @@
 //!
 //! The crate deals only in public material. The only private key it ever holds is
 //! the ephemeral CA key in [`ephemeral_ca`], which never leaves that module's
-//! `issue` call; the device key stays in the Secure Enclave and reaches this crate
-//! through [`keystone_core::signer::KeystoneSigningIdentity`].
+//! `issue` call; the device key stays in the machine's secure hardware and reaches
+//! this crate through [`keystone_core::signer::KeystoneSigningIdentity`].
 
 pub mod certificate;
 pub mod csr;

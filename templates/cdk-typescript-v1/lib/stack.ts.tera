@@ -204,7 +204,7 @@ export class {{ stack_class }} extends Stack {
         // hash of the certificate public key.
         acceptRoleSessionName: true,
         // Instance properties are for hosts enrolled through a Roles Anywhere
-        // agent; a Mac signing with its own Secure Enclave has none.
+        // agent; a laptop signing with its own secure hardware has none.
         requireInstanceProperties: false,
         // Maps the certificate's URI SAN into a session principal tag, which is
         // what the trust policy condition above tests.
