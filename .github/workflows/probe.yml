@@ -1,0 +1,30 @@
+name: Probe
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: What zip tools exist and what separators do they write
+        run: |
+          mkdir -p d/pkg && echo hi > d/pkg/keystone.exe && echo lic > d/pkg/LICENSE
+          cd d
+          echo "=== tool availability"
+          for t in 7z zip pwsh powershell; do printf '%s: ' "$t"; command -v $t || echo MISSING; done
+          echo "=== powershell 5.1 Compress-Archive"
+          powershell -NoLogo -NonInteractive -Command "Compress-Archive -Path 'pkg' -DestinationPath 'a-ps51.zip' -Force" || true
+          echo "=== pwsh 7 Compress-Archive"
+          pwsh -NoLogo -NonInteractive -Command "Compress-Archive -Path 'pkg' -DestinationPath 'a-pwsh.zip' -Force" || true
+          echo "=== 7z"
+          7z a -tzip a-7z.zip pkg > /dev/null || true
+          echo "=== separators per archive (python namelist)"
+          for f in a-ps51.zip a-pwsh.zip a-7z.zip; do
+            [ -f "$f" ] || { echo "$f MISSING"; continue; }
+            python -c "
+import zipfile,sys
+z=zipfile.ZipFile('$f')
+print('$f', z.namelist())
+"
+          done
