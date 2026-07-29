@@ -1,0 +1,149 @@
+# Build the `keystone` binary for each platform that has a hardware key store.
+#
+# Two triggers, one build path. A tag produces a GitHub release with the binaries
+# attached; a manual dispatch produces the same binaries as run artifacts and
+# nothing else. That way the release path is exercised routinely rather than only
+# at the moment it matters.
+#
+# The build matrix follows the design document's Platform Support section
+# exactly: Apple Silicon macOS and x86-64 Windows. Intel macOS is listed there as
+# "may be supported later after integration testing", so there is deliberately no
+# `x86_64-apple-darwin` entry — shipping a binary for a configuration the project
+# has not tested would make an untested claim.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS runners are Apple Silicon and ship the command line tools, so
+          # the Swift bridge that `cryptokit-rs` compiles builds without setup.
+          # Its build script maps the target arch to a Swift triple and panics on
+          # anything but x86_64 or aarch64, so the target must stay explicit.
+          - name: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            binary: keystone
+          # CNG is part of the OS; nothing beyond the toolchain is needed. The
+          # MSVC target is the right one here even though it cannot be
+          # cross-compiled from macOS — on a Windows runner the SDK headers
+          # `ring` needs are present.
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: keystone.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+          rustup default stable
+          rustc --version
+
+      # `--locked` so a release binary is built from the dependency versions in
+      # the committed lockfile and not from whatever resolves that day.
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p keystone-cli
+
+      # A binary that cannot report its own version is broken in a way worth
+      # catching before it is attached to a release. It runs on a machine with no
+      # key store, so this is also a check that startup does not require one:
+      # only the commands that touch the key store may fail.
+      - name: Smoke-test the binary
+        run: |
+          ./target/${{ matrix.target }}/release/${{ matrix.binary }} --version
+          ./target/${{ matrix.target }}/release/${{ matrix.binary }} --help > /dev/null
+
+      # Archived rather than uploaded bare, because `actions/upload-artifact`
+      # does not preserve the executable bit and a downloaded `keystone` that
+      # will not run is a confusing first impression.
+      - name: Package
+        id: package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # A dispatch run is not a tag, so name it by commit instead.
+          case "${GITHUB_REF_TYPE}" in
+            tag) ;;
+            *) version="$(git rev-parse --short HEAD)" ;;
+          esac
+          name="keystone-${version}-${{ matrix.target }}"
+          mkdir -p "dist/${name}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${name}/"
+          cp README.md LICENSE "dist/${name}/"
+          tar -czf "dist/${name}.tar.gz" -C dist "${name}"
+          # For verifying a download; not a signature, and not a substitute for
+          # one. It says the file arrived intact, not that this project produced
+          # it. Written from inside `dist` so the recorded name has no directory
+          # prefix and `-c` works wherever the file is unpacked. macOS has
+          # `shasum` and not `sha256sum`; Git Bash on the Windows runner has
+          # `sha256sum` from coreutils, so both are tried rather than assuming.
+          (
+            cd dist
+            if command -v sha256sum > /dev/null; then
+              sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+            else
+              shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256"
+            fi
+          )
+          echo "archive=dist/${name}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.archive }}.sha256
+          if-no-files-found: error
+
+  release:
+    # Only a tag publishes. A manual run stops at the artifacts above.
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      # The only write scope this workflow needs, and it is granted to this job
+      # alone rather than at the top of the file.
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Drafted rather than published: the binaries are built on runners with
+          # no Secure Enclave and no TPM, so no run of this workflow has ever
+          # exercised a signing path. Someone should install one and run
+          # `keystone doctor` on real hardware before this is public.
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --draft \
+            --generate-notes \
+            dist/*.tar.gz dist/*.sha256

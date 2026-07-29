@@ -1,0 +1,99 @@
+# Formatting, lints, and tests on both platforms Keystone supports.
+#
+# Only first-party actions are used, and the toolchain comes from the `rustup`
+# already on the runner image rather than a third-party setup action. Keystone's
+# whole premise is that a private key never leaves the hardware; a release
+# pipeline that pulls in unpinned third-party code to build that binary would be
+# working against it. The cost is a few explicit `rustup` lines.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a branch makes the in-flight run for that branch pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keystone's own crates carry no build scripts worth incrementalising and CI
+  # never reuses a target directory across commits, so incremental compilation
+  # is pure overhead here.
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    # bash on Windows too, so one script body works on both runners.
+    shell: bash
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide the other's result: the two
+      # backends are separate implementations of the same contract, and a
+      # failure in one says nothing about the other.
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        id: toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+          rustc --version
+          echo "version=$(rustc --version | tr ' ()' '-')" >> "$GITHUB_OUTPUT"
+
+      # The compiler version is part of the key, not just the lockfile: a cached
+      # `target` directory built by a different rustc is not reusable, and a
+      # restore-keys fallback onto one produces a confusing full rebuild at best.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ steps.toolchain.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-${{ steps.toolchain.outputs.version }}-
+
+      # Formatting is platform-independent, so it runs once rather than twice.
+      - name: cargo fmt
+        if: runner.os == 'macOS'
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # The hardware tests early-return when the platform has no key store, and
+      # GitHub's runners have neither a Secure Enclave nor a TPM. That is the
+      # design's fail-closed behaviour observed from the outside: everything
+      # that does not need hardware still runs, and nothing silently falls back
+      # to a software key. The suites needing npm or a live AWS account are
+      # `#[ignore]`d and stay that way here.
+      - name: cargo test
+        run: cargo test --workspace --locked
+
+  msrv:
+    name: msrv (1.88)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to `rust-version` in the workspace manifest. `cargo check` rather
+      # than a full test run: the question is whether the declared MSRV is
+      # honest, not whether an old compiler passes the suite.
+      - name: Install the toolchain
+        run: |
+          rustup toolchain install 1.88 --profile minimal
+          rustup default 1.88
+
+      - run: cargo check --workspace --all-targets --locked

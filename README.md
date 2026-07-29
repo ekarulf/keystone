@@ -89,6 +89,28 @@ AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar \
 That checks the code but runs nothing: the TPM tests need a TPM, so they are
 compiled only for Windows and must be run there.
 
+## Continuous integration
+
+Two workflows under `.github/workflows`:
+
+* `ci.yml` — formatting, `clippy -D warnings`, and the test suite on macOS and
+  Windows runners, plus a `cargo check` against the declared MSRV of 1.88.
+* `release.yml` — builds `aarch64-apple-darwin` and `x86_64-pc-windows-msvc`
+  binaries. A `v*` tag drafts a GitHub release with both archives attached; a
+  manual dispatch produces the same archives as run artifacts and publishes
+  nothing.
+
+Neither runner has a Secure Enclave or a TPM, so the hardware tests early-return
+and CI never exercises a signing path. That is the fail-closed design observed
+from the outside, and it is also the limit of what CI can tell you: a release
+binary should be run through `keystone doctor` on real hardware before it is
+published, which is why the release is drafted rather than published outright.
+
+No `x86_64-apple-darwin` binary is built, matching the Platform Support section
+of the design document — Intel Macs are listed there as possible future support
+pending integration testing, and shipping a binary for an untested configuration
+would claim more than the project has verified.
+
 ## Workflow
 
 ```bash
