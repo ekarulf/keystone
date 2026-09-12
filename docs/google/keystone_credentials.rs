@@ -1,5 +1,6 @@
 //! Consumer adapter for google-cloud-auth 1.16.0. Copy into chromebook-control.
-//! Requires tokio process/io-util/time, serde derive, serde_json, http, and anyhow.
+//! Requires tokio process/io-util/time, serde derive, serde_json, http, anyhow,
+//! and rustix with the fs feature.
 use google_cloud_auth::credentials::{
     AccessToken, AccessTokenCredentials, AccessTokenCredentialsProvider, CacheableResource,
     CredentialsProvider,
@@ -92,13 +93,32 @@ fn trusted(path: &Path) -> anyhow::Result<()> {
 fn trusted(_: &Path) -> anyhow::Result<()> {
     anyhow::bail!("Keystone Google adapter requires Unix")
 }
-fn read_config(path: &Path) -> anyhow::Result<Vec<u8>> {
+#[cfg(unix)]
+fn open_config(path: &Path) -> anyhow::Result<std::fs::File> {
+    let fd = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK,
+        rustix::fs::Mode::empty(),
+    )?;
+    let file = std::fs::File::from(fd);
+    anyhow::ensure!(
+        file.metadata()?.is_file(),
+        "credential configuration must be a regular file"
+    );
+    Ok(file)
+}
+#[cfg(not(unix))]
+fn open_config(_: &Path) -> anyhow::Result<std::fs::File> {
+    anyhow::bail!("Keystone Google adapter requires Unix")
+}
+pub fn read_config(path: &Path) -> anyhow::Result<Vec<u8>> {
     use std::io::Read;
     trusted(path)?;
     let mut bytes = Vec::new();
-    std::fs::File::open(path)?
-        .take(LIMIT + 1)
-        .read_to_end(&mut bytes)?;
+    open_config(path)?.take(LIMIT + 1).read_to_end(&mut bytes)?;
     anyhow::ensure!(
         bytes.len() as u64 <= LIMIT,
         "oversized credential configuration"
@@ -181,5 +201,24 @@ impl CredentialsProvider for Keystone {
     }
     async fn universe_domain(&self) -> Option<String> {
         Some("googleapis.com".into())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    #[test]
+    fn configuration_fifo_is_rejected_without_a_writer() {
+        let dir =
+            std::env::temp_dir().join(format!("keystone-adapter-fifo-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("config.json");
+        assert!(std::process::Command::new("mkfifo")
+            .args(["-m", "600"])
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success());
+        assert!(super::open_config(&path).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

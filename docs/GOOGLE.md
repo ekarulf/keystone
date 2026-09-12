@@ -88,9 +88,11 @@ Do not label an access token as an OIDC `id_token` or external AWS assertion.
 consumer adapter, checked against the actual pinned Rust SDK. Copy it into
 `crates/chromebook-control/src/`, add `mod keystone_credentials;`, and add an
 explicit branch in `GoogleAdmin::workload_identity` before the existing
-external-account builder:
+external-account builder. Replace its initial `std::fs::read(path)` as well;
+that read happens before dispatch and otherwise can block on a FIFO:
 
 ```rust
+let config: Value = serde_json::from_slice(&keystone_credentials::read_config(path)?)?;
 if config["type"] == "keystone_google" {
     return Self::new(keystone_credentials::credentials(path, service_account)?, customer);
 }
@@ -101,7 +103,8 @@ independently checks the fixed account, audience, scope, profile, helper path,
 home path, file trust and every token response. It implements the SDK's
 `AccessTokenCredentialsProvider`; `GoogleAdmin` can keep calling
 `credentials.access_token()` with its existing timeout. Add Tokio features
-`process` and `io-util` if not already enabled. No shell is invoked. Stderr and
+`process` and `io-util` if not already enabled, and `rustix = { version = "1",
+features = ["fs"] }` for safe file opening. No shell is invoked. Stderr and
 malformed responses are never included in application errors.
 
 The complete non-secret configuration is
@@ -156,7 +159,7 @@ hiding recovery after trust is restored. The consumer kills its helper on a
 20-second timeout. Cached tokens may remain usable until expiry after remote
 trust revocation, as with any already-issued OAuth token.
 
-Private files are opened no-follow and checked through their handles for owner,
+Private files are opened nonblocking and no-follow and checked through their handles for owner,
 mode, regular-file type and hard links; ancestors are checked for symlinks and
 untrusted writers. Cache updates are atomic. Existing AWS storage continues to
 use Keystone's existing permission model; this change does not claim to repair

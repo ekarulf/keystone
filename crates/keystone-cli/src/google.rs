@@ -117,7 +117,9 @@ fn open_private(path: &Path, create: bool) -> Result<File> {
         .create(create)
         .truncate(false)
         .mode(0o600)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        // A FIFO can block in open(), before the handle can be inspected.
+        // NONBLOCK permits fstat to reject it without waiting for a writer.
+        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32)
         .open(path)
         .map_err(|_| fail("cannot open private file"))?;
     let m = file
@@ -896,6 +898,20 @@ mod tests {
             "[profiles.chromebook.google]\nsubject = 'user@example.com'"
         ))
         .is_err());
+    }
+
+    #[test]
+    fn nonregular_private_files_fail_without_waiting_for_a_writer() {
+        let dir = Temp::new();
+        assert!(std::process::Command::new("mkfifo")
+            .args(["-m", "600"])
+            .arg(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        assert!(read_file(&dir.path()).is_err());
+        assert!(open_private(&dir.path(), true).is_err());
+        assert!(read_file(&dir.0).is_err());
     }
 
     #[test]

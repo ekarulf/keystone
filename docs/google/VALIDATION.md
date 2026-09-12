@@ -31,3 +31,17 @@ See ../GOOGLE.md for exact remaining setup and consumer commissioning steps.
 
 The local consumer configuration is staged only. Binary installation/commit
 identity are recorded in the external handoff after the signed commit is made.
+
+## Independent review follow-up
+
+A subagent reviewed commit f28e94c and found one P2 availability defect:
+blocking file opens could hang on a FIFO before rejecting nonregular files.
+Its release-binary reproduction remained blocked after 21 seconds.
+
+Fixed Keystone and the staged consumer reader with nonblocking, no-follow
+opens followed by handle-based regular-file validation. The reviewer rechecked
+the fix and reported no new defects. Targeted Google tests now pass 12 cases;
+the staged adapter's FIFO regression also passes against auth SDK 1.16.0.
+The reviewer noted that the home consumer's initial pre-dispatch config read
+needs the same treatment; the handoff now explicitly uses the public safe reader
+there. No home repository files or cloud state were changed during this review.
