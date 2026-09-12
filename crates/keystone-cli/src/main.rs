@@ -12,6 +12,7 @@ mod context;
 mod exchange;
 mod identity;
 mod plan;
+mod ssh;
 
 use std::process::ExitCode;
 
@@ -38,6 +39,7 @@ fn main() -> ExitCode {
 fn run(cli: &Cli) -> Result<()> {
     let context = Context::new(cli.home.clone(), cli.allow_unsafe_permissions, cli.verbose)?;
     match &cli.command {
+        Command::Ssh(command) => ssh::run(&context, command),
         Command::Init(args) => commands::init::run(&context, args),
         Command::Bootstrap(args) => commands::bootstrap::run(&context, args),
         Command::Enroll(command) => commands::enroll::run(&context, command),

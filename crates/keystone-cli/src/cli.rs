@@ -39,6 +39,9 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Manage Secure Enclave SSH identities and their agent sockets.
+    #[command(subcommand)]
+    Ssh(SshCommand),
     /// Create a hardware-backed identity without issuing a certificate.
     Init(InitArgs),
     /// Create an identity, issue a certificate from a one-shot CA, and destroy the CA key.
@@ -63,6 +66,25 @@ pub enum Command {
     /// Generate and synchronize AWS infrastructure.
     #[command(subcommand)]
     Infra(InfraCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SshCommand {
+    /// Create an SSH identity, public key, and SSH config snippet (idempotent).
+    Init(SshArgs),
+    /// Print the OpenSSH public key.
+    PublicKey(SshArgs),
+    /// Print the SSH configuration for this identity.
+    Config(SshArgs),
+    /// Serve the SSH agent socket in the foreground.
+    Agent(SshArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct SshArgs {
+    /// Identity name, also used as the public-key comment.
+    #[arg(default_value = "my-keystone-id")]
+    pub name: String,
 }
 
 /// Which profile to act on. Most commands need only this.

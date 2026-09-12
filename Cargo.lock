@@ -850,6 +850,7 @@ dependencies = [
 name = "keystone-cli"
 version = "0.1.1"
 dependencies = [
+ "base64",
  "clap",
  "fs2",
  "keystone-core",
@@ -858,6 +859,7 @@ dependencies = [
  "keystone-pki",
  "keystone-roles-anywhere",
  "keystone-windows",
+ "p256",
  "serde_json",
  "time",
  "toml",

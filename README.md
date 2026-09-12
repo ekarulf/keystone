@@ -1,17 +1,21 @@
 # Keystone
 
-Hardware-backed temporary AWS credentials, from the Secure Enclave on macOS or
-the TPM on Windows.
+Hardware-backed temporary AWS credentials on macOS and Windows, plus a Secure
+Enclave SSH agent on macOS.
 
 ## Status
 
-Implemented against [docs/DESIGN.md](docs/DESIGN.md), which remains the
-specification, and exercised end to end against a real AWS account: a Secure
-Enclave key signs `CreateSession`, IAM Roles Anywhere returns temporary
-credentials, and the AWS CLI uses them through `credential_process`. The
+The AWS workflow is implemented against [docs/DESIGN.md](docs/DESIGN.md) and
+exercised end to end against a real AWS account: a Secure Enclave key signs
+`CreateSession`, IAM Roles Anywhere returns temporary credentials, and the AWS CLI uses them through `credential_process`. The
 account-dependent tests pass; see [Testing](#testing).
 
-Three defects only a real account surfaced, each now regression-tested:
+The macOS SSH agent supports dedicated non-exportable P-256 identities, OpenSSH
+public-key output, and generated SSH configuration. Listing keys and verifying
+signatures have been exercised with `ssh-add` against a real Secure Enclave.
+See [SSH workflow](#secure-enclave-ssh-agent-macos).
+
+Three AWS defects only a real account surfaced, each now regression-tested:
 
 * the generated role's trust policy granted `sts:AssumeRole` alone, so
   `CreateSession` failed with `AccessDenied` after the certificate and signature
@@ -63,8 +67,9 @@ CA, and biometric prompts for routine credential refresh.
 
 Requires a recent Rust toolchain, and hardware with the key store for the target
 platform: a Mac with a Secure Enclave, or a PC with a TPM 2.0 enabled in firmware.
-There is no software fallback — on a machine without one, every operation reports
-that no hardware-backed key store is available.
+There is no software fallback: creating or using a hardware identity requires
+the corresponding key store. SSH identities require the macOS Secure Enclave;
+the Windows TPM backend currently serves the AWS workflow.
 
 On macOS the Secure Enclave binding compiles a Swift bridge, so Xcode command line
 tools must be installed. On Windows nothing beyond the toolchain is needed; CNG is
@@ -114,7 +119,7 @@ of the design document — Intel Macs are listed there as possible future suppor
 pending integration testing, and shipping a binary for an untested configuration
 would claim more than the project has verified.
 
-## Workflow
+## AWS workflow
 
 ```bash
 # --device-name also becomes the role session name, so CloudTrail and
@@ -136,6 +141,65 @@ credential_process = /usr/local/bin/keystone credential-process --profile person
 region = us-east-1
 ```
 
+## Secure Enclave SSH agent (macOS)
+
+Create a dedicated, non-exportable P-256 SSH key and start its agent:
+
+```sh
+keystone ssh init my-keystone-id
+keystone ssh agent my-keystone-id
+```
+
+`init` prints an OpenSSH public key (`ecdsa-sha2-nistp256 AAAA…
+my-keystone-id@keystone`) and writes `identity.pub` and `ssh_config` under
+`~/Library/Application Support/Keystone/ssh/my-keystone-id/` by default.
+Repeating `init` preserves the key. Copy the public key to your server's `authorized_keys` or your Git hosting
+account. No AWS profile, certificate, or region is required.
+
+Print the public key again with `keystone ssh public-key my-keystone-id`.
+
+Print the generated config with `keystone ssh config my-keystone-id`. It contains:
+
+```sshconfig
+Host *
+    IdentityAgent "/Users/YOUR_USER/Library/Application Support/Keystone/ssh/my-keystone-id/agent.sock"
+    IdentityFile "/Users/YOUR_USER/Library/Application Support/Keystone/ssh/my-keystone-id/identity.pub"
+    IdentitiesOnly yes
+```
+
+With the agent running, connect from another terminal:
+
+```sh
+ssh -F "$HOME/Library/Application Support/Keystone/ssh/my-keystone-id/ssh_config" user@host
+```
+
+Alternatively, copy these settings into a matching `Host` block in `~/.ssh/config`. `IdentityAgent` takes only the socket
+path; `IdentityFile` selects the public key. The generated config is a separate
+file and does not modify your existing SSH settings. Paths are absolute and
+quoted to support spaces. `--home` / `KEYSTONE_HOME` also apply to SSH commands;
+use the same value for initialization and the agent.
+
+The agent runs in the foreground until stopped; automatic login startup is not
+installed. One process serves one identity. Its directory is mode 0700 and the
+socket is mode 0600. A process lock prevents duplicate agents, and restarting
+replaces a stale socket. To check interoperability:
+
+```sh
+keystone_ssh_dir="$HOME/Library/Application Support/Keystone/ssh/my-keystone-id"
+SSH_AUTH_SOCK="$keystone_ssh_dir/agent.sock" ssh-add -L
+SSH_AUTH_SOCK="$keystone_ssh_dir/agent.sock" ssh-add -T "$keystone_ssh_dir/identity.pub"
+```
+
+Keys use Keystone's existing device-only, after-first-unlock policy with no
+Touch ID prompt. The on-disk identity contains an opaque, device-bound Secure
+Enclave reference, never an exportable private key. Processes running as your
+user can request signatures while the agent is available. Only SSH list and
+sign requests are supported; key import/removal, agent locking, and destination
+constraints are unsupported. Avoid agent forwarding unless you intend to grant
+the remote host signing access. There is no software-key fallback on unsupported
+hardware or platforms. SSH ECDSA encoding follows
+[RFC 5656](https://www.rfc-editor.org/rfc/rfc5656).
+
 ## Layout
 
 | Crate | Contents |
@@ -147,7 +211,7 @@ region = us-east-1
 | `keystone-pki` | Certificate parsing and validation, the ephemeral CA |
 | `keystone-roles-anywhere` | `AWS4-X509-ECDSA-SHA256` signing and the `CreateSession` client |
 | `keystone-infra` | CDK project generation and profile sync |
-| `keystone-cli` | The `keystone` binary |
+| `keystone-cli` | The `keystone` binary, including the macOS SSH agent |
 | `keystone-tests` | The suites under `tests/` |
 
 ## Testing

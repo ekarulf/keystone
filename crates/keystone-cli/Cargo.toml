@@ -23,6 +23,8 @@ keystone-pki.workspace = true
 keystone-roles-anywhere.workspace = true
 
 clap.workspace = true
+base64.workspace = true
+p256.workspace = true
 # The per-profile refresh lock. `fs2` is used only for `flock`, so an
 # interrupted refresh releases it when the process dies.
 fs2.workspace = true
