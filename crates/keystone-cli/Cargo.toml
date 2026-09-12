@@ -29,8 +29,18 @@ p256.workspace = true
 # interrupted refresh releases it when the process dies.
 fs2.workspace = true
 serde_json.workspace = true
+serde.workspace = true
+sha2.workspace = true
+hex.workspace = true
+zeroize.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+hmac = "0.12"
+url = "2"
 time.workspace = true
 toml.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["fs"] }
 
 # The TPM backend, selected by `crate::backend` on Windows only.
 [target.'cfg(windows)'.dependencies]

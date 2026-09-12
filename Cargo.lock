@@ -853,6 +853,8 @@ dependencies = [
  "base64",
  "clap",
  "fs2",
+ "hex",
+ "hmac",
  "keystone-core",
  "keystone-infra",
  "keystone-macos",
@@ -860,9 +862,15 @@ dependencies = [
  "keystone-roles-anywhere",
  "keystone-windows",
  "p256",
+ "reqwest",
+ "rustix",
+ "serde",
  "serde_json",
+ "sha2",
  "time",
  "toml",
+ "url",
+ "zeroize",
 ]
 
 [[package]]

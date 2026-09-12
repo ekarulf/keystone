@@ -63,6 +63,8 @@ pub enum Command {
     Revoke(ProfileArgs),
     /// List the configured profiles.
     Profiles,
+    /// Print a scoped Google service-account token using the profile’s fixed policy (Unix).
+    GoogleToken(ProfileArgs),
     /// Generate and synchronize AWS infrastructure.
     #[command(subcommand)]
     Infra(InfraCommand),

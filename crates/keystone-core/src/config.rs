@@ -107,6 +107,9 @@ pub fn validate_profile_name(name: &str) -> Result<()> {
 /// One named Keystone profile.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
+    /// Optional, fixed Google federation policy for this AWS identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub google: Option<GooglePolicy>,
     pub region: String,
 
     #[serde(default)]
@@ -168,6 +171,7 @@ impl Profile {
     pub fn new(region: impl Into<String>) -> Self {
         Self {
             region: region.into(),
+            google: None,
             trust_anchor_arn: PLACEHOLDER.to_string(),
             roles_anywhere_profile_arn: PLACEHOLDER.to_string(),
             role_arn: PLACEHOLDER.to_string(),
@@ -185,6 +189,9 @@ impl Profile {
     }
 
     pub fn validate(&self, name: &str) -> Result<()> {
+        if let Some(google) = &self.google {
+            google.validate()?;
+        }
         if self.region.is_empty() {
             return Err(KeystoneError::InvalidConfiguration(format!(
                 "profile {name:?} has no region"
@@ -886,5 +893,70 @@ certificate_expires_at = "2031-07-25T00:00:00Z"
         assert!(error.to_string().contains("writable by other users"));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// Google targets are administrator-owned policy, never caller arguments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GooglePolicy {
+    pub audience: String,
+    pub service_account: String,
+    pub scopes: Vec<String>,
+}
+
+impl GooglePolicy {
+    pub fn validate(&self) -> Result<()> {
+        let invalid =
+            || KeystoneError::InvalidConfiguration("invalid Google federation policy".into());
+        let parts: Vec<_> = self.audience.split('/').collect();
+        let id = |s: &str| {
+            (4..=32).contains(&s.len())
+                && s.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                && !s.starts_with("gcp-")
+        };
+        if parts.len() != 11
+            || parts[..4] != ["", "", "iam.googleapis.com", "projects"]
+            || parts[4].is_empty()
+            || !parts[4].bytes().all(|b| b.is_ascii_digit())
+            || parts[5..8] != ["locations", "global", "workloadIdentityPools"]
+            || parts[9] != "providers"
+            || !id(parts[8])
+            || !id(parts[10])
+        {
+            return Err(invalid());
+        }
+        let Some((account, project)) = self.service_account.split_once('@') else {
+            return Err(invalid());
+        };
+        let Some(project) = project.strip_suffix(".iam.gserviceaccount.com") else {
+            return Err(invalid());
+        };
+        let email_part = |s: &str| {
+            !s.is_empty()
+                && s.len() <= 63
+                && s.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        };
+        if !email_part(account)
+            || !email_part(project)
+            || self.scopes.is_empty()
+            || self.scopes.len() > 16
+            || self.scopes.iter().any(|scope| {
+                !scope.starts_with("https://www.googleapis.com/auth/")
+                    || scope.len() > 200
+                    || !scope
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"/:._-".contains(&b))
+            })
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    pub fn impersonation_url(&self) -> String {
+        format!("https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{}:generateAccessToken", self.service_account)
     }
 }

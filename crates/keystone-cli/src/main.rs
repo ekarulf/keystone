@@ -10,6 +10,8 @@ mod cli;
 mod commands;
 mod context;
 mod exchange;
+#[cfg(unix)]
+mod google;
 mod identity;
 mod plan;
 mod ssh;
@@ -49,6 +51,19 @@ fn run(cli: &Cli) -> Result<()> {
         Command::Doctor(args) => commands::doctor::run(&context, args),
         Command::Rotate(args) => commands::rotate::run(&context, args),
         Command::Revoke(args) => commands::revoke::run(&context, args),
+        Command::GoogleToken(args) => {
+            #[cfg(unix)]
+            {
+                google::run(&context, args)
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = args;
+                Err(KeystoneError::Other(
+                    "Google token storage currently requires Unix".into(),
+                ))
+            }
+        }
         Command::Profiles => commands::profiles::run(&context),
         Command::Infra(InfraCommand::Cdk(command)) => commands::infra::run(&context, command),
     }

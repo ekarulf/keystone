@@ -141,6 +141,17 @@ credential_process = /usr/local/bin/keystone credential-process --profile person
 region = us-east-1
 ```
 
+## Google service-account tokens (Unix)
+
+`keystone google-token --profile chromebook` uses a named profile's fixed Google
+policy to exchange renewable AWS credentials through Workload Identity Federation
+and return a scoped service-account OAuth token. Tokens are cached privately;
+concurrent refreshes are coalesced and failures back off. No Google private key
+or Workspace-user impersonation is used. Stdout contains a secret token document.
+
+See [Google setup and consumer handoff](docs/GOOGLE.md) for cloud trust, the Rust
+consumer adapter, deployment state, and the remaining AWS administrator setup.
+
 ## Secure Enclave SSH agent (macOS)
 
 Create a dedicated, non-exportable P-256 SSH key and start its agent:

@@ -1,0 +1,10 @@
+{
+  "type": "keystone_google",
+  "version": 1,
+  "executable": "/Users/ekarulf/.local/bin/keystone",
+  "home": "/Users/ekarulf/Library/Application Support/Keystone",
+  "profile": "chromebook",
+  "audience": "//iam.googleapis.com/projects/893698030930/locations/global/workloadIdentityPools/keystone-home/providers/aws-mac-mini",
+  "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/chromebook-control@karulf-home.iam.gserviceaccount.com:generateAccessToken",
+  "scopes": ["https://www.googleapis.com/auth/admin.directory.device.chromeos"]
+}

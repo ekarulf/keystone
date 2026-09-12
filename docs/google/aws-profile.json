@@ -1,0 +1,10 @@
+{
+  "name": "KeystoneChromebookGoogle",
+  "roleArns": [
+    "arn:aws:iam::117915346373:role/KeystoneChromebookGoogle"
+  ],
+  "durationSeconds": 3600,
+  "enabled": true,
+  "acceptRoleSessionName": true,
+  "requireInstanceProperties": false
+}
