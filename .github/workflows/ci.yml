@@ -55,7 +55,7 @@ jobs:
       # The compiler version is part of the key, not just the lockfile: a cached
       # `target` directory built by a different rustc is not reusable, and a
       # restore-keys fallback onto one produces a confusing full rebuild at best.
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
