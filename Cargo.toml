@@ -38,7 +38,7 @@ cryptokit-rs = "0.2.5"
 fs2 = "0.4"
 hex = "0.4"
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
-rand = "0.8"
+rand = "0.10"
 # A safe `geteuid` for the file-ownership check in `keystone-core`. The workspace
 # forbids `unsafe_code`, so calling libc directly is not an option, and an
 # ownership check is what makes the permission check meaningful: a mode check
