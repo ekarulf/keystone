@@ -49,6 +49,9 @@ pub enum Command {
     /// Enroll with an existing certificate authority.
     #[command(subcommand)]
     Enroll(EnrollCommand),
+    /// Manage a reusable AWS KMS-backed certificate authority.
+    #[command(subcommand)]
+    Ca(CaCommand),
     /// Print temporary credentials in the AWS credential_process format.
     CredentialProcess(CredentialProcessArgs),
     /// Show what Keystone knows about a profile. Prints no secrets.
@@ -167,6 +170,75 @@ pub enum EnrollCommand {
     Csr(EnrollCsrArgs),
     /// Install a certificate issued for the hardware key.
     Install(EnrollInstallArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CaCommand {
+    /// Create a self-signed CA certificate for an existing KMS key.
+    Init(CaInitArgs),
+    /// Issue a device certificate from a Keystone CSR.
+    Issue(CaIssueArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct KmsArgs {
+    /// Existing asymmetric KMS key ARN, key ID, or alias.
+    #[arg(long)]
+    pub kms_key: String,
+
+    /// AWS Region containing the KMS key.
+    #[arg(long)]
+    pub region: String,
+
+    /// Named AWS configuration profile to use.
+    #[arg(long)]
+    pub aws_profile: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct CaInitArgs {
+    #[command(flatten)]
+    pub kms: KmsArgs,
+
+    /// CA subject, as `CN=...,O=...` with optional `OU=...`.
+    #[arg(long)]
+    pub subject: String,
+
+    /// CA certificate lifetime.
+    #[arg(long, default_value = "10y", value_parser = parse_validity_arg)]
+    pub validity: String,
+
+    /// Destination for the validated CA certificate.
+    #[arg(long)]
+    pub output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct CaIssueArgs {
+    #[command(flatten)]
+    pub kms: KmsArgs,
+
+    /// Self-signed CA certificate created by `keystone ca init`.
+    #[arg(long)]
+    pub ca_certificate: PathBuf,
+
+    /// PKCS#10 request created by `keystone enroll csr`.
+    #[arg(long)]
+    pub csr: PathBuf,
+
+    /// Issued device-certificate lifetime.
+    #[arg(long, default_value = "1y", value_parser = parse_validity_arg)]
+    pub validity: String,
+
+    /// Destination for the validated device certificate.
+    #[arg(long)]
+    pub output: PathBuf,
+}
+
+fn parse_validity_arg(value: &str) -> std::result::Result<String, String> {
+    crate::context::parse_validity(value)
+        .map(|_| value.to_string())
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Debug, Args)]
@@ -449,6 +521,36 @@ mod tests {
                 "--chain",
                 "issuer.pem",
             ],
+            &[
+                "keystone",
+                "ca",
+                "init",
+                "--kms-key",
+                "arn:aws:kms:us-east-2:123456789012:key/example",
+                "--region",
+                "us-east-2",
+                "--subject",
+                "CN=Keystone KMS CA,O=Example",
+                "--output",
+                "ca.pem",
+            ],
+            &[
+                "keystone",
+                "ca",
+                "issue",
+                "--kms-key",
+                "alias/keystone-ca",
+                "--region",
+                "us-east-2",
+                "--aws-profile",
+                "administrator",
+                "--ca-certificate",
+                "ca.pem",
+                "--csr",
+                "device.csr",
+                "--output",
+                "device.pem",
+            ],
             &["keystone", "inspect", "--profile", "personal"],
             &["keystone", "credential-process", "--profile", "personal"],
             &["keystone", "test", "--profile", "personal"],
@@ -506,6 +608,80 @@ mod tests {
             Cli::try_parse_from(*argv)
                 .unwrap_or_else(|error| panic!("{}: {error}", argv.join(" ")));
         }
+    }
+
+    #[test]
+    fn ca_commands_have_secure_defaults_and_required_arguments() {
+        let init = Cli::try_parse_from([
+            "keystone",
+            "ca",
+            "init",
+            "--kms-key",
+            "key-id",
+            "--region",
+            "us-east-2",
+            "--subject",
+            "CN=Example",
+            "--output",
+            "ca.pem",
+        ])
+        .unwrap();
+        let Command::Ca(CaCommand::Init(args)) = init.command else {
+            panic!("wrong command")
+        };
+        assert_eq!(args.validity, "10y");
+
+        let issue = Cli::try_parse_from([
+            "keystone",
+            "ca",
+            "issue",
+            "--kms-key",
+            "key-id",
+            "--region",
+            "us-east-2",
+            "--ca-certificate",
+            "ca.pem",
+            "--csr",
+            "device.csr",
+            "--output",
+            "device.pem",
+        ])
+        .unwrap();
+        let Command::Ca(CaCommand::Issue(args)) = issue.command else {
+            panic!("wrong command")
+        };
+        assert_eq!(args.validity, "1y");
+
+        assert!(Cli::try_parse_from([
+            "keystone",
+            "ca",
+            "init",
+            "--region",
+            "us-east-2",
+            "--subject",
+            "CN=Example",
+            "--output",
+            "ca.pem",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "keystone",
+            "ca",
+            "issue",
+            "--kms-key",
+            "key-id",
+            "--region",
+            "us-east-2",
+            "--ca-certificate",
+            "ca.pem",
+            "--csr",
+            "device.csr",
+            "--validity",
+            "forever",
+            "--output",
+            "device.pem",
+        ])
+        .is_err());
     }
 
     #[test]

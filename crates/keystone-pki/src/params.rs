@@ -6,8 +6,10 @@
 
 use keystone_core::error::{KeystoneError, Result};
 use keystone_core::identity::KeyId;
+use rand::RngCore as _;
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyUsagePurpose, SanType,
+    SerialNumber,
 };
 use time::OffsetDateTime;
 
@@ -22,6 +24,107 @@ pub const DEFAULT_LEAF_VALIDITY_DAYS: i64 = 5 * 365;
 /// The CA must outlive the leaf, or the chain stops validating while the device
 /// certificate still looks current.
 pub const DEFAULT_CA_VALIDITY_DAYS: i64 = 10 * 365;
+
+/// The subject and validity of a reusable externally-backed CA.
+#[derive(Debug, Clone)]
+pub struct ExternalCaSpec {
+    pub subject: DistinguishedName,
+    pub not_before: OffsetDateTime,
+    pub not_after: OffsetDateTime,
+}
+
+impl ExternalCaSpec {
+    pub fn from_subject(subject: &str, now: OffsetDateTime) -> Result<Self> {
+        Ok(Self {
+            subject: parse_ca_subject(subject)?,
+            not_before: now,
+            not_after: now + time::Duration::days(DEFAULT_CA_VALIDITY_DAYS),
+        })
+    }
+
+    pub fn with_validity(mut self, not_before: OffsetDateTime, not_after: OffsetDateTime) -> Self {
+        self.not_before = not_before;
+        self.not_after = not_after;
+        self
+    }
+
+    pub fn to_params(&self) -> Result<CertificateParams> {
+        if self.not_after <= self.not_before {
+            return Err(KeystoneError::InvalidConfiguration(
+                "CA validity must end after it begins".to_string(),
+            ));
+        }
+        let mut params = CertificateParams::default();
+        params.distinguished_name = self.subject.clone();
+        params.not_before = self.not_before;
+        params.not_after = self.not_after;
+        params.serial_number = Some(random_serial());
+        params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
+        params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+        Ok(params)
+    }
+}
+
+pub(crate) fn random_serial() -> SerialNumber {
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes[0] &= 0x7f;
+    if bytes.iter().all(|byte| *byte == 0) {
+        bytes[15] = 1;
+    }
+    SerialNumber::from_slice(&bytes)
+}
+
+/// Parse the deliberately small CA-subject grammar accepted by V1.
+pub fn parse_ca_subject(input: &str) -> Result<DistinguishedName> {
+    let mut name = DistinguishedName::new();
+    let mut seen_cn = false;
+    for component in input.split(',') {
+        let (kind, value) = component.split_once('=').ok_or_else(|| {
+            KeystoneError::InvalidConfiguration(format!(
+                "malformed CA subject component {component:?}; expected CN=...,O=..., or OU=..."
+            ))
+        })?;
+        let kind = kind.trim();
+        let value = value.trim();
+        if kind.is_empty() || value.contains(['=', '+']) {
+            return Err(KeystoneError::InvalidConfiguration(format!(
+                "malformed CA subject component {component:?}; reserved DN separators are not supported"
+            )));
+        }
+        validate_name("CA subject value", value)?;
+        let dn_type = match kind {
+            "CN" => {
+                if seen_cn {
+                    return Err(KeystoneError::InvalidConfiguration(
+                        "CA subject contains more than one CN".to_string(),
+                    ));
+                }
+                seen_cn = true;
+                DnType::CommonName
+            }
+            "O" => DnType::OrganizationName,
+            "OU" => DnType::OrganizationalUnitName,
+            _ => {
+                return Err(KeystoneError::InvalidConfiguration(format!(
+                    "unsupported CA subject attribute {kind:?}; use CN, O, or OU"
+                )))
+            }
+        };
+        if name.get(&dn_type).is_some() {
+            return Err(KeystoneError::InvalidConfiguration(format!(
+                "CA subject contains more than one {kind}"
+            )));
+        }
+        name.push(dn_type, value);
+    }
+    if !seen_cn {
+        return Err(KeystoneError::InvalidConfiguration(
+            "CA subject must contain a CN, for example CN=Keystone KMS CA,O=Example".to_string(),
+        ));
+    }
+    Ok(name)
+}
 
 /// What goes into a device certificate.
 #[derive(Debug, Clone)]
@@ -167,7 +270,7 @@ impl EphemeralCaSpec {
 /// The value is user-supplied and ends up in a DER string and in generated CDK
 /// source, so control characters and absurd lengths are refused early with a
 /// clear message rather than failing deep inside the encoder.
-fn validate_name(field: &str, value: &str) -> Result<()> {
+pub(crate) fn validate_name(field: &str, value: &str) -> Result<()> {
     if value.trim().is_empty() {
         return Err(KeystoneError::InvalidConfiguration(format!(
             "{field} must not be empty"

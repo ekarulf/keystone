@@ -141,6 +141,82 @@ credential_process = /usr/local/bin/keystone credential-process --profile person
 region = us-east-1
 ```
 
+## KMS-backed reusable CA
+
+For a group that needs to renew or replace device certificates without creating
+a new IAM Roles Anywhere trust anchor each time, Keystone can use an existing
+AWS KMS asymmetric key as a reusable CA. This differs from `--ca-mode
+ephemeral`: the signing authority remains available to administrators, but its
+private scalar never leaves KMS. Device keys remain hardware-backed and
+non-exportable, and device/student roles need no KMS permission.
+
+Create the KMS key separately with key spec `ECC_NIST_P256`, key usage
+`SIGN_VERIFY`, and signing algorithm `ECDSA_SHA_256`. Keystone V1 intentionally
+does not create or delete keys, aliases, policies, or grants. Then initialize
+the public CA certificate:
+
+```bash
+keystone ca init \
+    --kms-key arn:aws:kms:us-east-2:123456789012:key/EXAMPLE \
+    --region us-east-2 \
+    --subject "CN=Keystone Device CA,O=Example" \
+    --validity 10y \
+    --output ca.pem
+```
+
+Create a device identity and CSR on the device, issue it on an administrator
+machine, and install the public result back on the device:
+
+```bash
+keystone init --profile devices --region us-east-2
+keystone enroll csr --profile devices --device-name alice-laptop --output alice.csr
+
+keystone ca issue \
+    --kms-key arn:aws:kms:us-east-2:123456789012:key/EXAMPLE \
+    --region us-east-2 \
+    --ca-certificate ca.pem \
+    --csr alice.csr \
+    --validity 1y \
+    --output alice.pem
+
+keystone enroll install --profile devices --certificate alice.pem --chain ca.pem
+```
+
+Both CA commands use the normal AWS credential provider chain. `--aws-profile
+<name>` selects a named profile; static access-key arguments are not supported.
+The administrator needs only the following key permissions. The algorithm
+condition belongs on `kms:Sign`; `kms:GetPublicKey` is separate because that
+operation does not accept the `kms:SigningAlgorithm` condition key.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "kms:GetPublicKey",
+      "Resource": "arn:aws:kms:us-east-2:123456789012:key/EXAMPLE"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "kms:Sign",
+      "Resource": "arn:aws:kms:us-east-2:123456789012:key/EXAMPLE",
+      "Condition": {
+        "StringEquals": { "kms:SigningAlgorithm": "ECDSA_SHA_256" }
+      }
+    }
+  ]
+}
+```
+
+Only administrators should receive `kms:Sign`. Compromise of a device permits
+use of that device's hardware key and may expose already-issued temporary
+credentials, but cannot issue another certificate. Compromise of administrator
+credentials may permit issuance, without exposing the CA private scalar. Control
+of the KMS key is equivalent to compromise of the CA signing authority and
+affects every certificate it issued. Losing one device does not affect the CA;
+a replacement device can create a new hardware identity and CSR.
+
 ## Google service-account tokens (Unix)
 
 `keystone google-token --profile chromebook` uses a named profile's fixed Google

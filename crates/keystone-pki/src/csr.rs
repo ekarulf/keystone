@@ -21,6 +21,38 @@ pub struct CertificateRequest {
 }
 
 impl CertificateRequest {
+    /// Parse exactly one PEM-encoded PKCS#10 request and verify its signature.
+    /// Text outside the PEM block is ignored, as it is in OpenSSL's `-text`
+    /// output, but additional PEM objects are refused.
+    pub fn from_pem(input: &str) -> Result<Self> {
+        let mut entries = x509_parser::pem::Pem::iter_from_buffer(input.as_bytes());
+        let entry = entries
+            .next()
+            .ok_or_else(|| {
+                KeystoneError::InvalidCertificate("no PEM certificate request found".to_string())
+            })?
+            .map_err(|e| {
+                KeystoneError::InvalidCertificate(format!(
+                    "cannot parse certificate request PEM: {e}"
+                ))
+            })?;
+        if entry.label != PEM_LABEL {
+            return Err(KeystoneError::InvalidCertificate(format!(
+                "PEM block is {:?}, expected {PEM_LABEL:?}",
+                entry.label
+            )));
+        }
+        if entries.next().is_some() {
+            return Err(KeystoneError::InvalidCertificate(
+                "expected exactly one PEM certificate request".to_string(),
+            ));
+        }
+        verify_request(&entry.contents)?;
+        Ok(Self {
+            der: entry.contents,
+        })
+    }
+
     pub fn der(&self) -> &[u8] {
         &self.der
     }
@@ -168,15 +200,30 @@ mod tests {
         assert!(pem.starts_with("-----BEGIN CERTIFICATE REQUEST-----"));
         assert!(!pem.contains("PRIVATE KEY"));
 
-        let decoded = {
-            use base64::prelude::{Engine as _, BASE64_STANDARD};
-            let body: String = pem
-                .lines()
-                .filter(|line| !line.starts_with("-----"))
-                .collect();
-            BASE64_STANDARD.decode(body).unwrap()
-        };
-        assert_eq!(decoded, request.der());
+        let decoded = CertificateRequest::from_pem(&pem).unwrap();
+        assert_eq!(decoded.der(), request.der());
+    }
+
+    #[test]
+    fn pem_parsing_ignores_text_but_rejects_other_or_multiple_objects() {
+        let key = testing::random_device_key();
+        let spec = DeviceCertificateSpec::new("example-laptop", key.key_id().clone(), TEST_NOW);
+        let request = create_signing_request(&key, &spec).unwrap();
+        let pem = request.to_pem();
+
+        let decorated = format!("Certificate Request:\n    Data:\n{pem}\ntrailing text\n");
+        assert_eq!(
+            CertificateRequest::from_pem(&decorated).unwrap().der(),
+            request.der()
+        );
+
+        let wrong_label = pem
+            .replace("BEGIN CERTIFICATE REQUEST", "BEGIN CERTIFICATE")
+            .replace("END CERTIFICATE REQUEST", "END CERTIFICATE");
+        assert!(CertificateRequest::from_pem(&wrong_label).is_err());
+
+        let multiple = format!("{pem}\n{pem}");
+        assert!(CertificateRequest::from_pem(&multiple).is_err());
     }
 
     #[test]

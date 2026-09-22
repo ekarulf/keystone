@@ -4,8 +4,6 @@
 //! a CA. `csr` asks the enclave to sign a PKCS#10 request; `install` records the
 //! certificate that comes back, refusing one that does not belong to the key.
 
-use std::path::Path;
-
 use keystone_core::error::{KeystoneError, Result};
 use keystone_core::identity::KeyId;
 use keystone_core::signer::KeystoneSigningIdentity as _;
@@ -13,6 +11,7 @@ use keystone_core::store::write_atomic;
 use keystone_pki::{DeviceCertificateSpec, ParsedCertificate};
 
 use crate::cli::{EnrollCommand, EnrollCsrArgs, EnrollInstallArgs};
+use crate::commands::{read_certificate, read_certificate_bundle};
 use crate::context::Context;
 
 pub fn run(context: &Context, command: &EnrollCommand) -> Result<()> {
@@ -125,7 +124,7 @@ fn install(context: &Context, args: &EnrollInstallArgs) -> Result<()> {
     let now = context.now_checked()?;
 
     let leaf = read_certificate(&args.certificate)?;
-    let chain = read_bundle(&args.chain)?;
+    let chain = read_certificate_bundle(&args.chain)?;
     let (anchor, intermediates) = split_chain(chain, &leaf)?;
 
     // Validate before recording: the full device-certificate check plus the chain,
@@ -207,30 +206,6 @@ fn install(context: &Context, args: &EnrollInstallArgs) -> Result<()> {
     ));
     context.note(format!("    keystone test --profile {}", args.profile));
     Ok(())
-}
-
-/// Read one certificate, accepting PEM or DER.
-fn read_certificate(path: &Path) -> Result<ParsedCertificate> {
-    let bytes = std::fs::read(path)
-        .map_err(|error| KeystoneError::io(format!("cannot read {}", path.display()), error))?;
-    match std::str::from_utf8(&bytes) {
-        Ok(text) if text.contains("-----BEGIN CERTIFICATE-----") => {
-            ParsedCertificate::from_pem(text)
-        }
-        _ => ParsedCertificate::from_der(&bytes),
-    }
-}
-
-/// Read a PEM bundle, or a single DER certificate.
-fn read_bundle(path: &Path) -> Result<Vec<ParsedCertificate>> {
-    let bytes = std::fs::read(path)
-        .map_err(|error| KeystoneError::io(format!("cannot read {}", path.display()), error))?;
-    match std::str::from_utf8(&bytes) {
-        Ok(text) if text.contains("-----BEGIN CERTIFICATE-----") => {
-            ParsedCertificate::from_pem_bundle(text)
-        }
-        _ => Ok(vec![ParsedCertificate::from_der(&bytes)?]),
-    }
 }
 
 /// Separate the self-issued anchor from the intermediates, dropping a repeated leaf.

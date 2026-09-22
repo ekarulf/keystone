@@ -6,11 +6,12 @@
 
 use keystone_core::error::{KeystoneError, Result};
 use keystone_core::identity::{KeyId, Sha256Fingerprint};
+use std::collections::HashSet;
 use time::OffsetDateTime;
 // Imported by name rather than through `x509_parser::prelude::*`, whose glob
 // includes a `time` module that would shadow the `time` crate.
 use x509_parser::certificate::X509Certificate;
-use x509_parser::extensions::GeneralName;
+use x509_parser::extensions::{GeneralName, ParsedExtension};
 use x509_parser::pem::Pem;
 use x509_parser::prelude::FromDer as _;
 
@@ -34,11 +35,18 @@ pub struct ParsedCertificate {
     pub key_usage_key_cert_sign: bool,
     pub key_usage_crl_sign: bool,
     pub key_usage_critical: bool,
+    pub key_usage_flags: u16,
     /// Present only for a P-256 key; other curves and algorithms are refused
     /// at parse time, since Keystone cannot use them.
     pub public_key_sec1: [u8; 65],
     pub uri_sans: Vec<String>,
     pub dns_sans: Vec<String>,
+    pub other_san_count: usize,
+    pub signature_algorithm_oid: String,
+    pub signature_algorithm_parameters_present: bool,
+    pub extension_oids: Vec<String>,
+    pub subject_key_identifier: Option<Vec<u8>>,
+    pub authority_key_identifier: Option<Vec<u8>>,
 }
 
 impl ParsedCertificate {
@@ -56,6 +64,24 @@ impl ParsedCertificate {
         }
 
         let public_key_sec1 = p256_public_key(&certificate)?;
+
+        if certificate.signature_algorithm != certificate.tbs_certificate.signature {
+            return Err(malformed(
+                "certificate's outer and TBS signature algorithms differ".to_string(),
+            ));
+        }
+
+        let mut seen_extension_oids = HashSet::new();
+        let mut extension_oids = Vec::with_capacity(certificate.extensions().len());
+        for extension in certificate.extensions() {
+            let oid = extension.oid.to_id_string();
+            if !seen_extension_oids.insert(oid.clone()) {
+                return Err(malformed(format!(
+                    "certificate contains duplicate extension {oid}"
+                )));
+            }
+            extension_oids.push(oid);
+        }
 
         let (is_ca, basic_constraints_critical, path_len) = match certificate
             .basic_constraints()
@@ -76,6 +102,7 @@ impl ParsedCertificate {
 
         let mut uri_sans = Vec::new();
         let mut dns_sans = Vec::new();
+        let mut other_san_count = 0;
         if let Some(extension) = certificate
             .subject_alternative_name()
             .map_err(|e| malformed(format!("cannot read subject alternative names: {e}")))?
@@ -84,8 +111,25 @@ impl ParsedCertificate {
                 match name {
                     GeneralName::URI(uri) => uri_sans.push((*uri).to_string()),
                     GeneralName::DNSName(dns) => dns_sans.push((*dns).to_string()),
-                    _ => {}
+                    _ => other_san_count += 1,
                 }
+            }
+        }
+
+        let mut subject_key_identifier = None;
+        let mut authority_key_identifier = None;
+        for extension in certificate.extensions() {
+            match extension.parsed_extension() {
+                ParsedExtension::SubjectKeyIdentifier(identifier) => {
+                    subject_key_identifier = Some(identifier.0.to_vec());
+                }
+                ParsedExtension::AuthorityKeyIdentifier(identifier) => {
+                    authority_key_identifier = identifier
+                        .key_identifier
+                        .as_ref()
+                        .map(|identifier| identifier.0.to_vec());
+                }
+                _ => {}
             }
         }
 
@@ -109,9 +153,19 @@ impl ParsedCertificate {
             key_usage_key_cert_sign: key_usage.as_ref().is_some_and(|k| k.value.key_cert_sign()),
             key_usage_crl_sign: key_usage.as_ref().is_some_and(|k| k.value.crl_sign()),
             key_usage_critical: key_usage.as_ref().is_some_and(|k| k.critical),
+            key_usage_flags: key_usage.as_ref().map_or(0, |k| k.value.flags),
             public_key_sec1,
             uri_sans,
             dns_sans,
+            other_san_count,
+            signature_algorithm_oid: certificate.signature_algorithm.algorithm.to_id_string(),
+            signature_algorithm_parameters_present: certificate
+                .signature_algorithm
+                .parameters
+                .is_some(),
+            extension_oids,
+            subject_key_identifier,
+            authority_key_identifier,
         })
     }
 

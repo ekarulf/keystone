@@ -21,7 +21,7 @@ use std::process::ExitCode;
 use clap::Parser as _;
 use keystone_core::error::{KeystoneError, Result};
 
-use crate::cli::{Cli, Command, InfraCommand};
+use crate::cli::{CaCommand, Cli, Command, InfraCommand};
 use crate::context::Context;
 
 fn main() -> ExitCode {
@@ -45,6 +45,10 @@ fn run(cli: &Cli) -> Result<()> {
         Command::Init(args) => commands::init::run(&context, args),
         Command::Bootstrap(args) => commands::bootstrap::run(&context, args),
         Command::Enroll(command) => commands::enroll::run(&context, command),
+        Command::Ca(command) => match command {
+            CaCommand::Init(args) => commands::ca::init(&context, args),
+            CaCommand::Issue(args) => commands::ca::issue(&context, args),
+        },
         Command::CredentialProcess(args) => commands::credential_process::run(&context, args),
         Command::Inspect(args) => commands::inspect::run(&context, args),
         Command::Test(args) => commands::test::run(&context, args),

@@ -173,6 +173,79 @@ pub fn validate_ca_certificate(certificate: &ParsedCertificate, now: OffsetDateT
     Ok(())
 }
 
+/// Apply the stricter policy for a reusable Keystone root CA.
+pub fn validate_reusable_ca_certificate(
+    certificate: &ParsedCertificate,
+    now: OffsetDateTime,
+) -> Result<()> {
+    validate_ca_certificate(certificate, now)?;
+    if certificate.path_len != Some(0) {
+        return Err(KeystoneError::InvalidCertificateChain(
+            "reusable CA must have pathLen=0".to_string(),
+        ));
+    }
+    if !certificate.key_usage_critical {
+        return Err(KeystoneError::InvalidCertificateChain(
+            "reusable CA keyUsage extension must be critical".to_string(),
+        ));
+    }
+    if !certificate.key_usage_crl_sign {
+        return Err(KeystoneError::InvalidCertificateChain(
+            "reusable CA does not permit cRLSign".to_string(),
+        ));
+    }
+    if certificate.key_usage_flags != (1 << 5 | 1 << 6) {
+        return Err(KeystoneError::InvalidCertificateChain(
+            "reusable CA key usage must contain exactly keyCertSign and cRLSign".to_string(),
+        ));
+    }
+    if certificate.signature_algorithm_oid != "1.2.840.10045.4.3.2" {
+        return Err(KeystoneError::InvalidCertificateChain(
+            "reusable CA signature algorithm must be ECDSA with SHA-256".to_string(),
+        ));
+    }
+    if certificate.signature_algorithm_parameters_present {
+        return Err(KeystoneError::InvalidCertificateChain(
+            "reusable CA ECDSA signature algorithm must omit parameters".to_string(),
+        ));
+    }
+    const EXPECTED_EXTENSIONS: [&str; 3] = ["2.5.29.14", "2.5.29.15", "2.5.29.19"];
+    if certificate.extension_oids.len() != EXPECTED_EXTENSIONS.len()
+        || !EXPECTED_EXTENSIONS
+            .iter()
+            .all(|oid| certificate.extension_oids.iter().any(|found| found == oid))
+    {
+        return Err(KeystoneError::InvalidCertificateChain(
+            "reusable CA must contain exactly basicConstraints, keyUsage, and subjectKeyIdentifier"
+                .to_string(),
+        ));
+    }
+    if !certificate.uri_sans.is_empty()
+        || !certificate.dns_sans.is_empty()
+        || certificate.other_san_count != 0
+    {
+        return Err(KeystoneError::InvalidCertificateChain(
+            "reusable CA must not contain subject alternative names".to_string(),
+        ));
+    }
+    if certificate.subject_key_identifier.is_none() {
+        return Err(KeystoneError::InvalidCertificateChain(
+            "reusable CA is missing its subject key identifier".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Verify the root CA's self-signature, not merely its matching names.
+pub fn validate_self_signed_ca(certificate: &ParsedCertificate) -> Result<()> {
+    if !certificate.is_self_issued() {
+        return Err(KeystoneError::InvalidCertificateChain(
+            "CA certificate is not self-issued".to_string(),
+        ));
+    }
+    verify_issued_by(certificate, certificate)
+}
+
 /// Validate the chain from `leaf` through `intermediates` to `anchor`.
 ///
 /// `intermediates` is in leaf-to-root order, as a PEM chain file is written.

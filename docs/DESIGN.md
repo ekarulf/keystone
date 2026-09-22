@@ -994,6 +994,41 @@ ca-private-key.pem
 
 IAM Roles Anywhere trust anchors are regional resources. The default trust-anchor quota should be checked before using one CA per device; AWS currently documents IAM Roles Anywhere quotas per account and Region.
 
+---
+
+# Reusable KMS-backed CA
+
+`keystone ca init` and `keystone ca issue` support a deliberately small external
+CA whose signing key is an existing AWS KMS `ECC_NIST_P256` `SIGN_VERIFY` key.
+Keystone retrieves the SubjectPublicKeyInfo with `GetPublicKey` and asks KMS to
+sign rcgen's raw certificate body with `ECDSA_SHA_256` and `MessageType=RAW`.
+Every returned DER ECDSA signature is verified locally over that same raw body,
+which both detects malformed KMS responses and prevents accidental double
+hashing.
+
+The PKI crate owns subject, CSR, extension, validity, serial-number, and chain
+policy behind rcgen's generic signing interface. The CLI crate alone depends on
+the AWS SDK and adapts KMS to that interface. The normal AWS credential provider
+chain is used, optionally selecting `--aws-profile`; no credentials or CA
+configuration are persisted.
+
+Initialization requires `--kms-key`, `--region`, `--subject`, and `--output` and
+defaults to ten years. Issuance additionally requires `--ca-certificate` and
+`--csr` and defaults to one year. The CA is self-signed, has `CA=true`,
+`pathLen=0`, and only `keyCertSign` plus `cRLSign`. Issued certificates preserve
+the validated CSR subject, P-256 public key, and sole Keystone device URI SAN,
+but no arbitrary requested extensions. The CA chooses validity and a random
+128-bit positive serial, and a leaf may not outlive its CA.
+
+KMS key provisioning, aliases, key policies, rotation, deletion, revocation,
+CRL/OCSP service, automatic approval, subordinate CAs, and network enrollment
+are outside V1. Device roles have no KMS permissions. Administrators require
+`kms:GetPublicKey` and `kms:Sign`; the latter should be constrained with
+`kms:SigningAlgorithm = ECDSA_SHA_256`. A reusable authority reduces trust-anchor
+churn but increases blast radius: control of the KMS key or administrator
+signing credentials can issue certificates for every relying trust anchor,
+although the CA private scalar remains non-exportable.
+
 For larger fleets, use:
 
 ```text

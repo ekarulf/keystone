@@ -19,6 +19,18 @@ keystone-roles-anywhere = { path = "crates/keystone-roles-anywhere" }
 keystone-infra = { path = "crates/keystone-infra" }
 
 base64 = "0.22"
+# KMS is confined to the CLI crate. These are pinned to the newest releases
+# whose declared MSRV is Rust 1.88. Default features would pull in SSO clients
+# and the AWS-LC HTTPS stack; Keystone needs neither. The KMS `rustls` feature
+# selects the ring-backed connector already used elsewhere in the workspace.
+aws-config = { version = "=1.8.13", default-features = false, features = [
+    "credentials-process",
+    "rt-tokio",
+] }
+aws-sdk-kms = { version = "=1.99.0", default-features = false, features = [
+    "rt-tokio",
+    "rustls",
+] }
 clap = { version = "4", features = ["derive"] }
 # The Secure Enclave binding. Its build script compiles a vendored Swift bridge,
 # so it is a macOS-only, target-gated dependency of `keystone-macos` alone.
@@ -63,6 +75,7 @@ sha2 = "0.10"
 tera = { version = "2", default-features = false }
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing", "serde", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
 toml = "0.8"
 # "verify" pulls in ring so certificate and CSR signatures can actually be
 # checked; comparing issuer and subject names alone would accept a forged chain.
