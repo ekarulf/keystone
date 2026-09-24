@@ -42,7 +42,7 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install the toolchain
         id: toolchain
@@ -86,7 +86,7 @@ jobs:
     name: msrv (1.88)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Pinned to `rust-version` in the workspace manifest. `cargo check` rather
       # than a full test run: the question is whether the declared MSRV is
