@@ -79,7 +79,7 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 toml = "0.8"
 # "verify" pulls in ring so certificate and CSR signatures can actually be
 # checked; comparing issuer and subject names alone would accept a forged chain.
-x509-parser = { version = "0.16", features = ["verify"] }
+x509-parser = { version = "0.18", features = ["verify"] }
 zeroize = { version = "1", features = ["derive"] }
 
 [workspace.lints.rust]
