@@ -76,7 +76,7 @@ tera = { version = "2", default-features = false }
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing", "serde", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
-toml = "0.8"
+toml = "1.1"
 # "verify" pulls in ring so certificate and CSR signatures can actually be
 # checked; comparing issuer and subject names alone would accept a forged chain.
 x509-parser = { version = "0.18", features = ["verify"] }
