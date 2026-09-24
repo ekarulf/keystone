@@ -47,7 +47,7 @@ rustix = { version = "1", features = ["process"] }
 # Raw Win32/CNG declarations for `keystone-win32-sys`. Microsoft's own bindings
 # are used rather than hand-written `extern` blocks: a mistyped FFI signature is
 # undefined behavior that a macOS build cannot catch.
-windows-sys = { version = "0.60", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
