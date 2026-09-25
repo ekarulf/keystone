@@ -141,6 +141,25 @@ credential_process = /usr/local/bin/keystone credential-process --profile person
 region = us-east-1
 ```
 
+## Hardware-backed service tokens
+
+Keystone can issue short-lived ES256 JWTs signed by a profile's existing Secure
+Enclave or TPM identity. The token contains the device key ID, device URI,
+issuer, audience, and issue/expiry times. A service must already trust the
+device's public key and verify the signature, issuer, audience, and expiry.
+
+```bash
+keystone token \
+  --profile robotics \
+  --issuer https://auth.example.com \
+  --audience https://api.example.com
+```
+
+The command prints one JWT and a newline to stdout. `--ttl 5m` is optional;
+supported lifetimes are 1 through 15 minutes (default 5 minutes). Issuer and
+audience must be absolute HTTPS URLs without credentials or fragments. Their
+spelling, including paths and trailing slashes, is preserved in the token.
+
 ## KMS-backed reusable CA
 
 For a group that needs to renew or replace device certificates without creating

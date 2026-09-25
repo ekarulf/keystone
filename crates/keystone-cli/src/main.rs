@@ -50,6 +50,7 @@ fn run(cli: &Cli) -> Result<()> {
             CaCommand::Issue(args) => commands::ca::issue(&context, args),
         },
         Command::CredentialProcess(args) => commands::credential_process::run(&context, args),
+        Command::Token(args) => commands::token::run(&context, args),
         Command::Inspect(args) => commands::inspect::run(&context, args),
         Command::Test(args) => commands::test::run(&context, args),
         Command::Doctor(args) => commands::doctor::run(&context, args),

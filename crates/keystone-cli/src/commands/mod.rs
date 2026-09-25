@@ -21,6 +21,7 @@ pub mod profiles;
 pub mod revoke;
 pub mod rotate;
 pub mod test;
+pub mod token;
 
 /// Read exactly one certificate, accepting PEM or DER.
 pub(super) fn read_certificate(path: &Path) -> Result<ParsedCertificate> {

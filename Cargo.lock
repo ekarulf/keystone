@@ -1399,6 +1399,8 @@ dependencies = [
  "rand 0.8.7",
  "rcgen",
  "rustls-pki-types",
+ "serde",
+ "serde_json",
  "sha2",
  "time",
  "x509-parser 0.16.0",
