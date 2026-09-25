@@ -36,7 +36,7 @@ sha2.workspace = true
 hex.workspace = true
 zeroize.workspace = true
 reqwest = { workspace = true, features = ["json"] }
-hmac = "0.12"
+hmac = "0.13"
 url = "2"
 time.workspace = true
 tokio.workspace = true
