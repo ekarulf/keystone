@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use keystone_core::config::{Config, GooglePolicy};
 use keystone_core::credentials::{AwsSessionCredentials, CredentialProcessOutput};
 use keystone_core::error::{KeystoneError, Result};
@@ -541,6 +541,13 @@ mod tests {
         Arc,
     };
     const NOW: i64 = 1800000000;
+    #[test]
+    fn hmac_sha256_matches_rfc_4231_case_1() {
+        assert_eq!(
+            hex::encode(hmac(&[0x0b; 20], "Hi There").as_slice()),
+            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+        );
+    }
     fn policy() -> GooglePolicy {
         GooglePolicy {
             audience: "//iam.googleapis.com/projects/893698030930/locations/global/workloadIdentityPools/keystone-home/providers/aws-mac-mini".into(),
