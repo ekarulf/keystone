@@ -54,6 +54,8 @@ pub enum Command {
     Ca(CaCommand),
     /// Print temporary credentials in the AWS credential_process format.
     CredentialProcess(CredentialProcessArgs),
+    /// Print a short-lived ES256 service token signed by the device identity.
+    Token(TokenArgs),
     /// Show what Keystone knows about a profile. Prints no secrets.
     Inspect(ProfileArgs),
     /// Exchange the device identity for credentials and report the result.
@@ -97,6 +99,41 @@ pub struct SshArgs {
 pub struct ProfileArgs {
     #[arg(long, default_value = "default")]
     pub profile: String,
+}
+
+#[derive(Debug, Args)]
+pub struct TokenArgs {
+    #[arg(long, default_value = "default")]
+    pub profile: String,
+
+    /// Exact HTTPS issuer value placed in the JWT.
+    #[arg(long)]
+    pub issuer: String,
+
+    /// Exact HTTPS audience value placed in the JWT.
+    #[arg(long)]
+    pub audience: String,
+
+    /// Token lifetime from 1m through 15m.
+    #[arg(long = "ttl", default_value = "5m", value_parser = parse_token_ttl)]
+    pub ttl_minutes: i64,
+}
+
+fn parse_token_ttl(value: &str) -> std::result::Result<i64, String> {
+    let minutes = value
+        .strip_suffix('m')
+        .and_then(|digits| {
+            if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                None
+            } else {
+                digits.parse::<i64>().ok()
+            }
+        })
+        .ok_or_else(|| "TTL must be a whole number of minutes, such as 5m".to_string())?;
+    if !(1..=15).contains(&minutes) {
+        return Err("TTL must be between 1m and 15m".to_string());
+    }
+    Ok(minutes)
 }
 
 #[derive(Debug, Args)]
@@ -780,5 +817,36 @@ mod tests {
             panic!("wrong command");
         };
         assert_eq!(args.profile, "default");
+    }
+
+    #[test]
+    fn token_ttl_defaults_and_bounds() {
+        let base = [
+            "keystone",
+            "token",
+            "--issuer",
+            "https://auth.example.com",
+            "--audience",
+            "https://api.example.com",
+        ];
+        let cli = Cli::try_parse_from(base).unwrap();
+        let Command::Token(args) = cli.command else {
+            panic!("wrong command")
+        };
+        assert_eq!(args.ttl_minutes, 5);
+        assert_eq!(args.profile, "default");
+        for ttl in ["1m", "15m"] {
+            let cli = Cli::try_parse_from(base.into_iter().chain(["--ttl", ttl])).unwrap();
+            let Command::Token(args) = cli.command else {
+                panic!("wrong command")
+            };
+            assert_eq!(args.ttl_minutes, if ttl == "1m" { 1 } else { 15 });
+        }
+        for ttl in ["0m", "16m", "5", "abc", "1h", "-1m"] {
+            assert!(
+                Cli::try_parse_from(base.into_iter().chain(["--ttl", ttl])).is_err(),
+                "{ttl}"
+            );
+        }
     }
 }

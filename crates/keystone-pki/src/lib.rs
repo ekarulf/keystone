@@ -11,6 +11,7 @@ pub mod ephemeral_ca;
 pub mod external_ca;
 pub mod params;
 pub mod signature;
+pub mod token;
 pub mod validate;
 
 #[cfg(any(test, feature = "testing"))]
