@@ -1,7 +1,7 @@
 {
-  "name": "KeystoneChromebookGoogle",
+  "name": "ExampleChromebookRole",
   "roleArns": [
-    "arn:aws:iam::117915346373:role/KeystoneChromebookGoogle"
+    "arn:aws:iam::123456789012:role/ExampleChromebookRole"
   ],
   "durationSeconds": 3600,
   "enabled": true,

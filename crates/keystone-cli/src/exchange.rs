@@ -222,8 +222,8 @@ fn client_for<'a>(
 /// authorization failures in whatever used the credentials.
 fn check_assumed_role(assumed: &str, requested_role_arn: &str) -> Result<()> {
     // Compared as a whole path segment, not as a substring. `contains` accepts
-    // every role whose name merely embeds the requested one — `KeystonePersonal`
-    // matches `KeystonePersonalAdmin` — and also matches when the name appears in
+    // every role whose name merely embeds the requested one — `ExampleDeviceRole`
+    // matches `ExampleDeviceRoleAdmin` — and also matches when the name appears in
     // the session-name position, so a session named after the role would satisfy
     // the check no matter which role was actually assumed.
     let requested = requested_role_arn.rsplit('/').next().unwrap_or_default();
@@ -427,7 +427,7 @@ mod tests {
             "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/1111".to_string();
         profile.roles_anywhere_profile_arn =
             "arn:aws:rolesanywhere:us-east-1:123456789012:profile/2222".to_string();
-        profile.role_arn = "arn:aws:iam::123456789012:role/KeystonePersonal".to_string();
+        profile.role_arn = "arn:aws:iam::123456789012:role/ExampleDeviceRole".to_string();
         profile.key_id = Some(keystone_core::identity::KeyId::parse("01JZDEVICE").unwrap());
         profile
     }
@@ -458,9 +458,9 @@ mod tests {
     fn a_session_for_another_role_is_rejected() {
         // The design's "the returned role is compatible with the requested role,
         // when that metadata is available".
-        let requested = "arn:aws:iam::123456789012:role/KeystonePersonal";
+        let requested = "arn:aws:iam::123456789012:role/ExampleDeviceRole";
         check_assumed_role(
-            "arn:aws:sts::123456789012:assumed-role/KeystonePersonal/example-laptop",
+            "arn:aws:sts::123456789012:assumed-role/ExampleDeviceRole/example-laptop",
             requested,
         )
         .unwrap();
@@ -475,17 +475,17 @@ mod tests {
 
     #[test]
     fn a_role_whose_name_merely_contains_the_requested_one_is_rejected() {
-        // The case a `contains` check accepts. `KeystonePersonalAdmin` is a
+        // The case a `contains` check accepts. `ExampleDeviceRoleAdmin` is a
         // different role with different permissions, and the name of the requested
         // role is a prefix of it — so this is the mismatch most likely to be a real
         // misconfiguration rather than a typo.
-        let requested = "arn:aws:iam::123456789012:role/KeystonePersonal";
+        let requested = "arn:aws:iam::123456789012:role/ExampleDeviceRole";
         for actual in [
-            "arn:aws:sts::123456789012:assumed-role/KeystonePersonalAdmin/example-laptop",
-            "arn:aws:sts::123456789012:assumed-role/NotKeystonePersonal/example-laptop",
+            "arn:aws:sts::123456789012:assumed-role/ExampleDeviceRoleAdmin/example-laptop",
+            "arn:aws:sts::123456789012:assumed-role/NotExampleDeviceRole/example-laptop",
             // The role name in the session-name position: the assumed role is
             // something else entirely, and only segment-wise parsing notices.
-            "arn:aws:sts::123456789012:assumed-role/SomethingElse/KeystonePersonal",
+            "arn:aws:sts::123456789012:assumed-role/SomethingElse/ExampleDeviceRole",
         ] {
             assert!(
                 check_assumed_role(actual, requested).is_err(),
@@ -498,7 +498,7 @@ mod tests {
     fn an_unrecognized_assumed_role_arn_does_not_fail_the_exchange() {
         // "when that metadata is available" — credentials that work must not be
         // discarded because the ARN was not in the shape this parser expects.
-        let requested = "arn:aws:iam::123456789012:role/KeystonePersonal";
+        let requested = "arn:aws:iam::123456789012:role/ExampleDeviceRole";
         for actual in [
             "",
             "not-an-arn",
@@ -516,8 +516,8 @@ mod tests {
         // IAM paths do not appear in the STS assumed-role ARN, so comparing the
         // full resource would reject a correct session.
         check_assumed_role(
-            "arn:aws:sts::123456789012:assumed-role/KeystonePersonal/example-laptop",
-            "arn:aws:iam::123456789012:role/keystone/devices/KeystonePersonal",
+            "arn:aws:sts::123456789012:assumed-role/ExampleDeviceRole/example-laptop",
+            "arn:aws:iam::123456789012:role/keystone/devices/ExampleDeviceRole",
         )
         .unwrap();
     }

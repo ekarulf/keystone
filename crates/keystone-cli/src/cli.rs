@@ -614,9 +614,9 @@ mod tests {
                 "--output",
                 "./keystone-infra",
                 "--stack-name",
-                "KeystonePersonal",
+                "ExampleDeviceRole",
                 "--role-name",
-                "KeystonePersonalMac",
+                "ExampleDeviceRole",
             ],
             &["keystone", "infra", "cdk", "print", "--profile", "personal"],
             &[
