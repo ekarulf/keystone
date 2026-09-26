@@ -195,7 +195,7 @@ mod tests {
 
     const TRUST_ANCHOR: &str = "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/1111";
     const RA_PROFILE: &str = "arn:aws:rolesanywhere:us-east-1:123456789012:profile/2222";
-    const ROLE: &str = "arn:aws:iam::123456789012:role/KeystonePersonal";
+    const ROLE: &str = "arn:aws:iam::123456789012:role/ExampleDeviceRole";
     const KEY_ID: &str = "01JZKEYSTONEDEVICE00000001";
 
     struct TempHome(PathBuf);
@@ -232,7 +232,7 @@ mod tests {
 
     fn outputs() -> StackOutputs {
         StackOutputs {
-            stack_name: "KeystonePersonal".to_string(),
+            stack_name: "ExampleDeviceRole".to_string(),
             trust_anchor_arn: TRUST_ANCHOR.to_string(),
             roles_anywhere_profile_arn: RA_PROFILE.to_string(),
             role_arn: ROLE.to_string(),
@@ -292,7 +292,7 @@ mod tests {
         sync_profile(&store, "personal", &outputs(), false).unwrap();
 
         let mut second = outputs();
-        second.stack_name = "KeystonePersonalV2".to_string();
+        second.stack_name = "ExampleDeviceRoleV2".to_string();
         second.trust_anchor_arn =
             "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/9999".to_string();
 

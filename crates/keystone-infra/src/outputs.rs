@@ -198,7 +198,7 @@ mod tests {
 
     const TRUST_ANCHOR: &str = "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/1111";
     const RA_PROFILE: &str = "arn:aws:rolesanywhere:us-east-1:123456789012:profile/2222";
-    const ROLE: &str = "arn:aws:iam::123456789012:role/KeystonePersonal";
+    const ROLE: &str = "arn:aws:iam::123456789012:role/ExampleDeviceRole";
 
     fn outputs_json(stack: &str) -> String {
         format!(
@@ -217,8 +217,8 @@ mod tests {
 
     #[test]
     fn the_arns_the_generated_stack_emits_are_read() {
-        let outputs = StackOutputs::parse(&outputs_json("KeystonePersonal"), None).unwrap();
-        assert_eq!(outputs.stack_name, "KeystonePersonal");
+        let outputs = StackOutputs::parse(&outputs_json("ExampleDeviceRole"), None).unwrap();
+        assert_eq!(outputs.stack_name, "ExampleDeviceRole");
         assert_eq!(outputs.trust_anchor_arn, TRUST_ANCHOR);
         assert_eq!(outputs.roles_anywhere_profile_arn, RA_PROFILE);
         assert_eq!(outputs.role_arn, ROLE);
@@ -248,28 +248,28 @@ mod tests {
         // ARNs, so the mistake would surface as an authorization failure.
         let json = format!(
             r#"{{"KeystoneWork": {{"TrustAnchorArn": "{TRUST_ANCHOR}"}},
-                 "KeystonePersonal": {{"TrustAnchorArn": "{TRUST_ANCHOR}"}}}}"#
+                 "ExampleDeviceRole": {{"TrustAnchorArn": "{TRUST_ANCHOR}"}}}}"#
         );
         let error = StackOutputs::parse(&json, None).unwrap_err();
         let message = format!("{error}");
         assert!(message.contains("KeystoneWork"), "{message}");
-        assert!(message.contains("KeystonePersonal"), "{message}");
+        assert!(message.contains("ExampleDeviceRole"), "{message}");
         assert!(message.contains("--stack-name"), "{message}");
     }
 
     #[test]
     fn a_missing_stack_name_lists_what_is_available() {
-        let error = StackOutputs::parse(&outputs_json("KeystonePersonal"), Some("KeystoneWork"))
+        let error = StackOutputs::parse(&outputs_json("ExampleDeviceRole"), Some("KeystoneWork"))
             .unwrap_err();
         let message = format!("{error}");
         assert!(message.contains("KeystoneWork"), "{message}");
-        assert!(message.contains("KeystonePersonal"), "{message}");
+        assert!(message.contains("ExampleDeviceRole"), "{message}");
     }
 
     #[test]
     fn a_missing_output_names_the_output_and_says_what_to_do() {
         let json = format!(
-            r#"{{"KeystonePersonal": {{"TrustAnchorArn": "{TRUST_ANCHOR}",
+            r#"{{"ExampleDeviceRole": {{"TrustAnchorArn": "{TRUST_ANCHOR}",
                                        "RoleArn": "{ROLE}"}}}}"#
         );
         let error = StackOutputs::parse(&json, None).unwrap_err();
@@ -282,7 +282,7 @@ mod tests {
         // The realistic failure: a hand-written stack that outputs the profile ARN
         // under TrustAnchorArn.
         let json = format!(
-            r#"{{"KeystonePersonal": {{"TrustAnchorArn": "{RA_PROFILE}",
+            r#"{{"ExampleDeviceRole": {{"TrustAnchorArn": "{RA_PROFILE}",
                                        "RolesAnywhereProfileArn": "{RA_PROFILE}",
                                        "RoleArn": "{ROLE}"}}}}"#
         );
@@ -295,7 +295,7 @@ mod tests {
         // A stack synthesized without env.region outputs a token. Writing it into a
         // profile would produce an endpoint that cannot be resolved.
         let json = format!(
-            r#"{{"KeystonePersonal": {{"TrustAnchorArn": "{TRUST_ANCHOR}",
+            r#"{{"ExampleDeviceRole": {{"TrustAnchorArn": "{TRUST_ANCHOR}",
                                        "RolesAnywhereProfileArn": "{RA_PROFILE}",
                                        "RoleArn": "{ROLE}",
                                        "Region": "${{Token[AWS.Region.4]}}"}}}}"#
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn an_empty_output_value_is_refused() {
         let json = format!(
-            r#"{{"KeystonePersonal": {{"TrustAnchorArn": "  ",
+            r#"{{"ExampleDeviceRole": {{"TrustAnchorArn": "  ",
                                        "RolesAnywhereProfileArn": "{RA_PROFILE}",
                                        "RoleArn": "{ROLE}"}}}}"#
         );
