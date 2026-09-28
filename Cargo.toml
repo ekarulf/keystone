@@ -18,7 +18,7 @@ keystone-pki = { path = "crates/keystone-pki" }
 keystone-roles-anywhere = { path = "crates/keystone-roles-anywhere" }
 keystone-infra = { path = "crates/keystone-infra" }
 
-base64 = "0.22"
+base64 = "0.23"
 # KMS is confined to the CLI crate. These are pinned to the newest releases
 # whose declared MSRV is Rust 1.88. Default features would pull in SSO clients
 # and the AWS-LC HTTPS stack; Keystone needs neither. The KMS `rustls` feature
