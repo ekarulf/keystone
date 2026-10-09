@@ -215,7 +215,7 @@ mod tests {
       "credentialSet": [
         {
           "assumedRoleUser": {
-            "arn": "arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/example-laptop",
+            "arn": "arn:aws:sts::123456789012:assumed-role/ExampleDeviceRole/example-laptop",
             "assumedRoleId": "AROAEXAMPLE:example-laptop"
           },
           "credentials": {
@@ -225,7 +225,7 @@ mod tests {
             "expiration": "2026-07-26T01:15:00Z"
           },
           "packedPolicySize": 0,
-          "roleArn": "arn:aws:iam::123456789012:role/KeystonePersonalMac",
+          "roleArn": "arn:aws:iam::123456789012:role/ExampleDeviceRole",
           "sourceIdentity": "example-laptop"
         }
       ],
@@ -245,7 +245,7 @@ mod tests {
         assert!(result
             .assumed_role_arn
             .unwrap()
-            .contains("assumed-role/KeystonePersonalMac"));
+            .contains("assumed-role/ExampleDeviceRole"));
     }
 
     #[test]

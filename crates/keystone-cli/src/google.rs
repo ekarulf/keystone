@@ -550,8 +550,8 @@ mod tests {
     }
     fn policy() -> GooglePolicy {
         GooglePolicy {
-            audience: "//iam.googleapis.com/projects/893698030930/locations/global/workloadIdentityPools/keystone-home/providers/aws-mac-mini".into(),
-            service_account: "chromebook-control@karulf-home.iam.gserviceaccount.com".into(),
+            audience: "//iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/keystone-example/providers/aws-example-device".into(),
+            service_account: "chromebook-control@example-project.iam.gserviceaccount.com".into(),
             scopes: vec!["https://www.googleapis.com/auth/admin.directory.device.chromeos".into()],
         }
     }
@@ -685,9 +685,9 @@ mod tests {
         assert!(headers["Authorization"]
             .contains("host;x-amz-date;x-amz-security-token;x-goog-cloud-target-resource"));
         assert!(headers["Authorization"].contains("Credential=first/"));
-        // Independently generated with botocore SigV4Auth using these public test credentials.
+        // Fixed SigV4 signature for these public test credentials and sample audience.
         assert!(headers["Authorization"].ends_with(
-            "Signature=f71f358d4e16bf1880c0e16c27477923c1b8afdbb6483fff5733336bcfda4ec6"
+            "Signature=66a40137c656b3507103ffbc00f443ed7d61e5c8326601017345ca479b4420d2"
         ));
         assert!(subject_token(
             &aws(NOW, "first"),

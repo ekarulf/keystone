@@ -41,7 +41,7 @@ const SUCCESS_BODY: &str = r#"{
   "credentialSet": [
     {
       "assumedRoleUser": {
-        "arn": "arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/example-laptop"
+        "arn": "arn:aws:sts::123456789012:assumed-role/ExampleDeviceRole/example-laptop"
       },
       "credentials": {
         "accessKeyId": "ASIAEXAMPLE",
@@ -56,7 +56,7 @@ const SUCCESS_BODY: &str = r#"{
 fn request() -> CreateSessionRequest {
     CreateSessionRequest {
         profile_arn: "arn:aws:rolesanywhere:us-east-1:123456789012:profile/p".to_string(),
-        role_arn: "arn:aws:iam::123456789012:role/KeystonePersonalMac".to_string(),
+        role_arn: "arn:aws:iam::123456789012:role/ExampleDeviceRole".to_string(),
         trust_anchor_arn: "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/t".to_string(),
         duration_seconds: 3600,
         role_session_name: Some(DEVICE_NAME.to_string()),

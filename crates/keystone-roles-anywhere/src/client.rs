@@ -276,7 +276,7 @@ mod tests {
     fn request() -> CreateSessionRequest {
         CreateSessionRequest {
             profile_arn: "arn:aws:rolesanywhere:us-east-1:123456789012:profile/p".to_string(),
-            role_arn: "arn:aws:iam::123456789012:role/KeystonePersonalMac".to_string(),
+            role_arn: "arn:aws:iam::123456789012:role/ExampleDeviceRole".to_string(),
             trust_anchor_arn: "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/t"
                 .to_string(),
             duration_seconds: 3600,

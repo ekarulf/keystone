@@ -48,7 +48,7 @@ const SUCCESS_BODY: &str = r#"{
   "credentialSet": [
     {
       "assumedRoleUser": {
-        "arn": "arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/example-laptop"
+        "arn": "arn:aws:sts::123456789012:assumed-role/ExampleDeviceRole/example-laptop"
       },
       "credentials": {
         "accessKeyId": "ASIAEXAMPLE",
@@ -63,7 +63,7 @@ const SUCCESS_BODY: &str = r#"{
 fn request() -> CreateSessionRequest {
     CreateSessionRequest {
         profile_arn: "arn:aws:rolesanywhere:us-east-1:123456789012:profile/p".to_string(),
-        role_arn: "arn:aws:iam::123456789012:role/KeystonePersonalMac".to_string(),
+        role_arn: "arn:aws:iam::123456789012:role/ExampleDeviceRole".to_string(),
         trust_anchor_arn: "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/t".to_string(),
         duration_seconds: 3600,
         role_session_name: Some("example-laptop".to_string()),
@@ -104,7 +104,7 @@ fn a_signed_request_is_exchanged_for_temporary_credentials() {
     );
     assert_eq!(
         result.assumed_role_arn.as_deref(),
-        Some("arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/example-laptop")
+        Some("arn:aws:sts::123456789012:assumed-role/ExampleDeviceRole/example-laptop")
     );
     assert!(result.credentials.validate(NOW).is_ok());
 }
@@ -136,7 +136,7 @@ fn the_request_on_the_wire_matches_what_aws_expects() {
     assert_eq!(body["roleSessionName"], "example-laptop");
     assert_eq!(
         body["roleArn"],
-        "arn:aws:iam::123456789012:role/KeystonePersonalMac"
+        "arn:aws:iam::123456789012:role/ExampleDeviceRole"
     );
 }
 

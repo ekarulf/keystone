@@ -31,7 +31,7 @@ const GOLDEN_REGION: &str = "us-east-1";
 
 const GOLDEN_PROFILE_ARN: &str =
     "arn:aws:rolesanywhere:us-east-1:123456789012:profile/1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d";
-const GOLDEN_ROLE_ARN: &str = "arn:aws:iam::123456789012:role/KeystonePersonalMac";
+const GOLDEN_ROLE_ARN: &str = "arn:aws:iam::123456789012:role/ExampleDeviceRole";
 const GOLDEN_TRUST_ANCHOR_ARN: &str =
     "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/9f8e7d6c-5b4a-3928-1706-f5e4d3c2b1a0";
 const GOLDEN_SESSION_NAME: &str = "example-laptop";
@@ -44,7 +44,7 @@ const GOLDEN_SESSION_NAME: &str = "example-laptop";
 const GOLDEN_BODY: &str = concat!(
     r#"{"durationSeconds":3600,"#,
     r#""profileArn":"arn:aws:rolesanywhere:us-east-1:123456789012:profile/1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d","#,
-    r#""roleArn":"arn:aws:iam::123456789012:role/KeystonePersonalMac","#,
+    r#""roleArn":"arn:aws:iam::123456789012:role/ExampleDeviceRole","#,
     r#""roleSessionName":"example-laptop","#,
     r#""trustAnchorArn":"arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/9f8e7d6c-5b4a-3928-1706-f5e4d3c2b1a0"}"#,
 );

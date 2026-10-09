@@ -6,8 +6,8 @@
       "Principal": {"Service": "rolesanywhere.amazonaws.com"},
       "Action": ["sts:AssumeRole", "sts:SetSourceIdentity", "sts:TagSession"],
       "Condition": {
-        "StringEquals": {"aws:SourceAccount": "117915346373"},
-        "ArnEquals": {"aws:SourceArn": "arn:aws:rolesanywhere:us-east-2:117915346373:trust-anchor/5184399a-5e77-4043-90fc-af7b6287468d"}
+        "StringEquals": {"aws:SourceAccount": "123456789012"},
+        "ArnEquals": {"aws:SourceArn": "arn:aws:rolesanywhere:us-east-2:123456789012:trust-anchor/00000000-0000-4000-8000-000000000001"}
       }
     },
     {
@@ -15,7 +15,7 @@
       "Principal": {"AWS": "*"},
       "Action": ["sts:AssumeRole", "sts:SetSourceIdentity", "sts:TagSession"],
       "Condition": {
-        "StringNotEquals": {"aws:PrincipalTag/x509SAN/URI": "urn:keystone:device:7bd0ce3fd8f6c4574113c556e5dbe5f0"}
+        "StringNotEquals": {"aws:PrincipalTag/x509SAN/URI": "urn:keystone:device:0123456789abcdef0123456789abcdef"}
       }
     }
   ]

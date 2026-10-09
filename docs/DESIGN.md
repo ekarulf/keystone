@@ -514,7 +514,7 @@ region = "us-east-1"
 
 trust_anchor_arn = "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/..."
 roles_anywhere_profile_arn = "arn:aws:rolesanywhere:us-east-1:123456789012:profile/..."
-role_arn = "arn:aws:iam::123456789012:role/KeystonePersonalMac"
+role_arn = "arn:aws:iam::123456789012:role/ExampleDeviceRole"
 
 role_session_name = "example-laptop"
 duration_seconds = 3600
@@ -1199,7 +1199,7 @@ Conceptually:
 ```json
 {
   "profileArn": "arn:aws:rolesanywhere:us-east-1:123456789012:profile/...",
-  "roleArn": "arn:aws:iam::123456789012:role/KeystonePersonalMac",
+  "roleArn": "arn:aws:iam::123456789012:role/ExampleDeviceRole",
   "trustAnchorArn": "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/...",
   "durationSeconds": 3600,
   "roleSessionName": "example-laptop"
@@ -1634,7 +1634,7 @@ Example:
 IAM Roles Anywhere authentication succeeded.
 
 Caller ARN:
-arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/example-laptop
+arn:aws:sts::123456789012:assumed-role/ExampleDeviceRole/example-laptop
 
 Credentials expire:
 2026-07-26T01:15:00Z
@@ -1686,7 +1686,7 @@ keystone infra cdk init \
     --profile personal \
     --output ./keystone-infra \
     --stack-name KeystonePersonal \
-    --role-name KeystonePersonalMac
+    --role-name ExampleDeviceRole
 ```
 
 For an ephemeral CA profile, Keystone already knows:

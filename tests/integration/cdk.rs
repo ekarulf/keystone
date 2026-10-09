@@ -495,7 +495,7 @@ fn a_modified_generated_file_is_not_overwritten_without_force() {
 
 const TRUST_ANCHOR: &str = "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/1111";
 const RA_PROFILE: &str = "arn:aws:rolesanywhere:us-east-1:123456789012:profile/2222";
-const ROLE: &str = "arn:aws:iam::123456789012:role/KeystonePersonal";
+const ROLE: &str = "arn:aws:iam::123456789012:role/ExampleDeviceRole";
 
 /// An outputs file of the shape `cdk deploy --outputs-file` writes.
 fn outputs_json(stack: &str, trust_anchor: &str, role: &str) -> String {
