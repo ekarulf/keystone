@@ -150,7 +150,7 @@ device's public key and verify the signature, issuer, audience, and expiry.
 
 ```bash
 keystone token \
-  --profile robotics \
+  --profile service \
   --issuer https://auth.example.com \
   --audience https://api.example.com
 ```

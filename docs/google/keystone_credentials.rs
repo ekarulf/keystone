@@ -13,11 +13,11 @@ use std::{
 };
 use tokio::io::AsyncReadExt;
 
-const AUDIENCE: &str = "//iam.googleapis.com/projects/893698030930/locations/global/workloadIdentityPools/keystone-home/providers/aws-mac-mini";
-const ACCOUNT: &str = "chromebook-control@karulf-home.iam.gserviceaccount.com";
+const AUDIENCE: &str = "//iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/keystone-example/providers/aws-example-device";
+const ACCOUNT: &str = "chromebook-control@example-project.iam.gserviceaccount.com";
 const SCOPE: &str = "https://www.googleapis.com/auth/admin.directory.device.chromeos";
-const EXECUTABLE: &str = "/Users/ekarulf/.local/bin/keystone";
-const HOME: &str = "/Users/ekarulf/Library/Application Support/Keystone";
+const EXECUTABLE: &str = "/usr/local/bin/keystone";
+const HOME: &str = "/path/to/keystone-example";
 const PROFILE: &str = "chromebook";
 const LIMIT: u64 = 65536;
 

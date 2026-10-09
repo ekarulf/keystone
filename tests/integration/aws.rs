@@ -88,14 +88,14 @@ const TRUST_ANCHOR_ARN: &str =
     "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/9f8e7d6c-5b4a-3928-1706-f5e4d3c2b1a0";
 const RA_PROFILE_ARN: &str =
     "arn:aws:rolesanywhere:us-east-1:123456789012:profile/1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d";
-const ROLE_ARN: &str = "arn:aws:iam::123456789012:role/KeystonePersonalMac";
+const ROLE_ARN: &str = "arn:aws:iam::123456789012:role/ExampleDeviceRole";
 
 /// A `CreateSession` success body, in the shape AWS returns it.
 const SUCCESS_BODY: &str = r#"{
   "credentialSet": [
     {
       "assumedRoleUser": {
-        "arn": "arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/example-laptop",
+        "arn": "arn:aws:sts::123456789012:assumed-role/ExampleDeviceRole/example-laptop",
         "assumedRoleId": "AROAEXAMPLE:example-laptop"
       },
       "credentials": {
@@ -105,7 +105,7 @@ const SUCCESS_BODY: &str = r#"{
         "expiration": "2026-07-26T02:15:00Z"
       },
       "packedPolicySize": 0,
-      "roleArn": "arn:aws:iam::123456789012:role/KeystonePersonalMac",
+      "roleArn": "arn:aws:iam::123456789012:role/ExampleDeviceRole",
       "sourceIdentity": "example-laptop"
     }
   ],
@@ -256,7 +256,7 @@ fn a_valid_identity_is_exchanged_for_credentials() {
     assert_eq!(result.credentials.access_key_id, "ASIAEXAMPLE");
     assert_eq!(
         result.assumed_role_arn.as_deref(),
-        Some("arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac/example-laptop")
+        Some("arn:aws:sts::123456789012:assumed-role/ExampleDeviceRole/example-laptop")
     );
 
     // The identity that reached AWS is the certificate, not the key: the leaf is
@@ -445,7 +445,7 @@ fn a_session_for_another_role_is_reported_rather_than_discarded() {
     // came back — `keystone-cli`'s `check_assumed_role` turns that into the
     // refusal, and its own tests cover the refusal itself.
     let identity = identity_for("device.pem");
-    let body = SUCCESS_BODY.replace("KeystonePersonalMac", "SomeOtherRole");
+    let body = SUCCESS_BODY.replace("ExampleDeviceRole", "SomeOtherRole");
     let server = StubServer::start(vec![StubResponse::ok(&body)]);
 
     let result = client(&identity, &server, NOW)
@@ -492,7 +492,7 @@ fn a_modified_body_invalidates_the_signature() {
             .replace("3600", "43200"),
         String::from_utf8(sent.body.clone())
             .unwrap()
-            .replace("KeystonePersonalMac", "AdministratorRole"),
+            .replace("ExampleDeviceRole", "AdministratorRole"),
     ] {
         assert_ne!(
             tampered.as_bytes(),
@@ -642,7 +642,7 @@ fn a_certificate_without_this_devices_san_fails() {
     let identity = identity_for("device-no-san.pem");
     let server = StubServer::start(vec![StubResponse::error(
         403,
-        r#"{"message":"User: arn:aws:sts::123456789012:assumed-role/KeystonePersonalMac is not authorized to perform: sts:AssumeRole with an explicit deny in the role trust policy","__type":"AccessDeniedException"}"#,
+        r#"{"message":"User: arn:aws:sts::123456789012:assumed-role/ExampleDeviceRole is not authorized to perform: sts:AssumeRole with an explicit deny in the role trust policy","__type":"AccessDeniedException"}"#,
     )]);
     let message = rejected(
         client(&identity, &server, NOW)
