@@ -273,6 +273,7 @@ fn validate_kms_key_info(info: &KmsKeyInfo) -> Result<[u8; 65]> {
 mod tests {
     use super::*;
     use p256::ecdsa::signature::Signer as _;
+    use p256::elliptic_curve::Generate as _;
     use std::sync::Arc;
 
     struct TestPublicKey([u8; 65]);
@@ -288,13 +289,13 @@ mod tests {
     }
 
     fn signing_key() -> p256::ecdsa::SigningKey {
-        p256::ecdsa::SigningKey::random(&mut rand::thread_rng())
+        p256::ecdsa::SigningKey::generate()
     }
 
     fn valid_info(key: &p256::ecdsa::SigningKey) -> KmsKeyInfo {
         let point: [u8; 65] = key
             .verifying_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes()
             .try_into()
             .unwrap();
@@ -342,7 +343,7 @@ mod tests {
         let key = signing_key();
         assert_eq!(
             validate_kms_key_info(&valid_info(&key)).unwrap().as_slice(),
-            key.verifying_key().to_encoded_point(false).as_bytes()
+            key.verifying_key().to_sec1_point(false).as_bytes()
         );
     }
 

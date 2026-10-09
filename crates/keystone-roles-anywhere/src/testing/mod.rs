@@ -15,6 +15,7 @@ pub mod stub_server;
 use keystone_core::error::Result;
 use p256::ecdsa::signature::{Signer as _, Verifier as _};
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
+use p256::elliptic_curve::Generate as _;
 
 use crate::request::AwsX509Identity;
 
@@ -34,7 +35,7 @@ impl TestIdentity {
     /// encodes them, and the tests that need a real certificate build one with
     /// `keystone-pki`.
     pub fn new() -> Self {
-        let signing_key = SigningKey::random(&mut rand::thread_rng());
+        let signing_key = SigningKey::generate();
         let verifying_key = *signing_key.verifying_key();
         Self {
             signing_key,
@@ -78,10 +79,7 @@ impl TestIdentity {
 
     /// The SEC1 uncompressed public key.
     pub fn public_key_sec1(&self) -> Vec<u8> {
-        self.verifying_key
-            .to_encoded_point(false)
-            .as_bytes()
-            .to_vec()
+        self.verifying_key.to_sec1_point(false).as_bytes().to_vec()
     }
 }
 

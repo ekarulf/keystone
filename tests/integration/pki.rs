@@ -45,7 +45,7 @@ fn fixture_device_public_key() -> [u8; 65] {
 
     let key =
         SigningKey::from_pkcs8_pem(&fixture("device-key.pem")).expect("the fixture key loads");
-    let encoded = key.verifying_key().to_encoded_point(false);
+    let encoded = key.verifying_key().to_sec1_point(false);
     let mut bytes = [0u8; 65];
     bytes.copy_from_slice(encoded.as_bytes());
     bytes

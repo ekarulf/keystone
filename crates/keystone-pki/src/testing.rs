@@ -11,6 +11,7 @@ use keystone_core::error::Result;
 use keystone_core::identity::KeyId;
 use keystone_core::signer::{DerEcdsaSignature, KeystoneSigningIdentity};
 use p256::ecdsa::signature::Signer as _;
+use p256::elliptic_curve::Generate as _;
 use rcgen::{
     CertificateParams, DistinguishedName, DnType, Issuer, KeyPair, PublicKeyData,
     SignatureAlgorithm,
@@ -36,13 +37,13 @@ impl TestDeviceKey {
     pub fn generate(key_id: KeyId) -> Self {
         Self {
             key_id,
-            signing_key: p256::ecdsa::SigningKey::random(&mut rand::thread_rng()),
+            signing_key: p256::ecdsa::SigningKey::generate(),
         }
     }
 
     /// The 65-byte uncompressed SEC1 public key.
     pub fn public_key_sec1(&self) -> [u8; 65] {
-        let encoded = self.signing_key.verifying_key().to_encoded_point(false);
+        let encoded = self.signing_key.verifying_key().to_sec1_point(false);
         let mut bytes = [0u8; 65];
         bytes.copy_from_slice(encoded.as_bytes());
         bytes

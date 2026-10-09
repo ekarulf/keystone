@@ -344,7 +344,7 @@ mod tests {
             Ok(self
                 .key
                 .verifying_key()
-                .to_encoded_point(false)
+                .to_sec1_point(false)
                 .as_bytes()
                 .try_into()
                 .unwrap())

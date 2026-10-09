@@ -125,7 +125,7 @@ fn device_key() -> SigningKey {
 }
 
 fn device_public_key() -> [u8; 65] {
-    let encoded = device_key().verifying_key().to_encoded_point(false);
+    let encoded = device_key().verifying_key().to_sec1_point(false);
     let mut bytes = [0u8; 65];
     bytes.copy_from_slice(encoded.as_bytes());
     bytes

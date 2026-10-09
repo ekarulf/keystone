@@ -180,6 +180,7 @@ mod tests {
     use super::*;
     use p256::ecdsa::signature::{Signer as _, Verifier as _};
     use p256::ecdsa::{Signature, SigningKey};
+    use p256::elliptic_curve::Generate as _;
 
     fn raw(r: u8, s: u8) -> Vec<u8> {
         let mut raw = vec![0u8; RAW_SIGNATURE_LEN];
@@ -254,7 +255,7 @@ mod tests {
     #[test]
     fn conversion_agrees_with_an_independent_implementation() {
         // The p256 crate produces both encodings, so it can arbitrate.
-        let key = SigningKey::random(&mut rand::thread_rng());
+        let key = SigningKey::generate();
         for message in [b"".as_slice(), b"keystone", &[0u8; 1024]] {
             let signature: Signature = key.sign(message);
             let converted = raw_to_der(&signature.to_bytes()).unwrap();
@@ -273,7 +274,7 @@ mod tests {
 
     #[test]
     fn a_converted_signature_still_verifies() {
-        let key = SigningKey::random(&mut rand::thread_rng());
+        let key = SigningKey::generate();
         let verifying_key = *key.verifying_key();
         let message = b"keystone device certificate";
         let signature: Signature = key.sign(message);
@@ -327,12 +328,8 @@ mod tests {
         // "hashed twice" bug would be undetectable.
         use sha2::{Digest as _, Sha256};
 
-        let key = SigningKey::random(&mut rand::thread_rng());
-        let public_key = key
-            .verifying_key()
-            .to_encoded_point(false)
-            .as_bytes()
-            .to_vec();
+        let key = SigningKey::generate();
+        let public_key = key.verifying_key().to_sec1_point(false).as_bytes().to_vec();
         let message = b"AWS4-X509-ECDSA-SHA256\n20260726T011500Z\nscope\ndigest";
         let signature: Signature = key.sign(message);
         let der = signature.to_der().as_bytes().to_vec();
@@ -343,16 +340,12 @@ mod tests {
 
     #[test]
     fn verification_rejects_the_wrong_key_a_bad_signature_and_junk_der() {
-        let key = SigningKey::random(&mut rand::thread_rng());
-        let public_key = key
-            .verifying_key()
-            .to_encoded_point(false)
-            .as_bytes()
-            .to_vec();
-        let other = SigningKey::random(&mut rand::thread_rng());
+        let key = SigningKey::generate();
+        let public_key = key.verifying_key().to_sec1_point(false).as_bytes().to_vec();
+        let other = SigningKey::generate();
         let other_public_key = other
             .verifying_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes()
             .to_vec();
 
