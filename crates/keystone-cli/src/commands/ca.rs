@@ -96,7 +96,13 @@ impl AwsKmsOperations {
     fn new(args: &KmsArgs) -> Result<Self> {
         let runtime = tokio::runtime::Runtime::new()
             .map_err(|e| KeystoneError::Other(format!("cannot start AWS runtime: {e}")))?;
+        let http_client = aws_smithy_http_client::Builder::new()
+            .tls_provider(aws_smithy_http_client::tls::Provider::Rustls(
+                aws_smithy_http_client::tls::rustls_provider::CryptoMode::Ring,
+            ))
+            .build_https();
         let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .http_client(http_client)
             .region(aws_config::Region::new(args.region.clone()));
         if let Some(profile) = &args.aws_profile {
             loader = loader.profile_name(profile);

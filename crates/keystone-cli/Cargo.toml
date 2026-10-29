@@ -25,6 +25,7 @@ keystone-roles-anywhere.workspace = true
 clap.workspace = true
 aws-config.workspace = true
 aws-sdk-kms.workspace = true
+aws-smithy-http-client.workspace = true
 base64.workspace = true
 p256.workspace = true
 # The per-profile refresh lock. `fs2` is used only for `flock`, so an
